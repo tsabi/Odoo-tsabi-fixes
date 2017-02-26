@@ -889,6 +889,8 @@ actual arch.
             if k not in fields_def:
                 del fields[k]
         for field in fields_def:
+            if field.startswith('in_group_'):
+                continue
             if field in fields:
                 fields[field].update(fields_def[field])
             else:
