@@ -192,7 +192,9 @@ class Currency(models.Model):
            :return: rounded float
         """
         self.ensure_one()
-        return tools.float_round(amount, precision_rounding=self.rounding)
+        return tools.float_repr(
+            tools.float_round(amount, precision_rounding=self.rounding), precision_digits=self.decimal_places
+        )
 
     def compare_amounts(self, amount1, amount2):
         """Compare ``amount1`` and ``amount2`` after rounding them according to the
