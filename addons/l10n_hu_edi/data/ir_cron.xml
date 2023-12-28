@@ -1,0 +1,20 @@
+<?xml version="1.0" ?>
+<odoo>
+    <data>
+
+        <record id="ir_cron_retry_non_final_transactions" model="ir.cron">
+            <field name="name">Automatic retry of transactions in non-final states</field>
+            <field name="model_id" ref="account.model_account_move"/>
+            <field name="state">code</field>
+            <field name="code">
+    env['account.move.send']._l10n_hu_edi_cron_retry_non_final_transactions()
+            </field>
+            <field name="user_id" ref="base.user_admin"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="numbercall">-1</field>
+            <field name="doall" eval="False"/>
+            <field name="nextcall" eval="(DateTime.now() + timedelta(days=1)).strftime('%Y-%m-%d 22:00:00')"/>
+        </record>
+     </data>
+</odoo>

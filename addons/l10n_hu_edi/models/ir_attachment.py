@@ -1,26 +1,33 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import api, models, tools
-from lxml import etree, objectify
+from odoo import models, api, _
+from odoo.exceptions import UserError
 
 
 class IrAttachment(models.Model):
-    _inherit = "ir.attachment"
+    _inherit = 'ir.attachment'
 
-    @api.model
-    def _l10n_hu_navservice_load_xsd_files(self, force_reload=False):
-        base_url = "https://raw.githubusercontent.com/OdooTech-hu/navservice-xsd/main/v3.0/"
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_active_transactions(self):
+        # Prevent unlinking of an invoice's main PDF if there is an active transaction in production mode.
+        if any(
+            att.res_model == 'account.move'
+            and att.res_field == 'invoice_pdf_report_file'
+            and (move := self.env['account.move'].browse(att.res_id).exists())
+            and move.l10n_hu_edi_active_transaction_id
+            and move.l10n_hu_edi_credentials_mode == 'production'
+            for att in self
+        ):
+            raise UserError(_('Cannot delete a PDF once the invoice has been sent to NAV!'))
 
-        for filename in ("invoiceAnnulment.xsd", "invoiceApi.xsd", "invoiceData.xsd", "serviceMetrics.xsd"):
-            tools.load_xsd_files_from_url(
-                self.env,
-                f"{base_url}{filename}",
-                f"l10n_hu_navservice.{filename}",
-                force_reload=force_reload,
-                # xsd_name_prefix="l10n_hu_navservice",
-                modify_xsd_content=lambda content: etree.tostring(
-                    objectify.fromstring(content), encoding="utf-8", pretty_print=True
-                ),
-            )
-        return
+        # Prevent unlinking an attachment of a an active transaction in production mode.
+        elif any(
+            att.res_model == 'l10n_hu_edi.transaction'
+            and att.res_field == 'attachment_file'
+            and (transaction := self.env['l10n_hu_edi.transaction'].browse(att.res_id).exists())
+            and transaction.is_active
+            and transaction.credentials_mode == 'production'
+            for att in self
+        ):
+            raise UserError(_('Cannot delete the XML of an active transaction!'))

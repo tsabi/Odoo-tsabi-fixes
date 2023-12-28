@@ -1,69 +1,58 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import models, fields, api
+from odoo import models, fields
 
 
 class ResCompany(models.Model):
-    _inherit = "res.company"
+    _inherit = 'res.company'
 
-    # Hungarian fields
-    l10n_hu_is_vat_group_member = fields.Boolean(
-        "TAX Group membership", related="partner_id.l10n_hu_is_vat_group_member", readonly=False
+    l10n_hu_group_vat = fields.Char(
+        related='partner_id.l10n_hu_group_vat',
+        readonly=False,
     )
-    l10n_hu_vat_group_member = fields.Char(
-        "Group Member TAX Number", related="partner_id.l10n_hu_vat_group_member", readonly=False
+    l10n_hu_tax_regime = fields.Selection(
+        selection=[
+            ('ie', 'Individual Exemption'),
+            ('ca', 'Cash Accounting'),
+            ('sb', 'Small Business'),
+        ],
+        string='Hungarian Tax Regime',
+    )
+    l10n_hu_edi_credentials_ids = fields.One2many(
+        comodel_name='l10n_hu_edi.credentials',
+        inverse_name='company_id',
+        string='NAV Credentials',
+    )
+    l10n_hu_edi_primary_credentials_id = fields.Many2one(
+        comodel_name='l10n_hu_edi.credentials',
+        string='Primary NAV Credentials',
     )
 
-    l10n_hu_company_tax_arrangments = fields.Selection(
-        related="partner_id.l10n_hu_company_tax_arrangments", readonly=False
-    )
-
-    # TAX Authority login credentials
-    l10n_hu_nav_credential_ids = fields.One2many("l10n_hu.nav_communication", "company_id", string="NAV Credentials")
-    l10n_hu_production_cred = fields.Boolean(
-        "Hungary: Production usage", compute="_comp_l10n_hu_in_production", compute_sudo=True
-    )
-
-    l10n_hu_use_demo_mode = fields.Boolean("Hungary: Demo mode?")
-
-    @api.depends("vat", "l10n_hu_nav_credential_ids.username", "l10n_hu_nav_credential_ids.state")
-    def _comp_l10n_hu_in_production(self):
+    def _l10n_hu_edi_configure_company(self):
+        """ Single-time configuration for companies, to be applied when l10n_hu_edi is installed
+        or a new company is created.
+        """
         for company in self:
-            company.l10n_hu_production_cred = bool(
-                self.env["l10n_hu.nav_communication"].search_count(
-                    [
-                        ("company_id", "=", company.id),
-                        ("state", "=", "prod"),
-                    ],
-                    limit=1,
-                )
-            )
+            # Set profit/loss accounts on cash rounding method
+            profit_account = self.env['account.chart.template'].with_company(company).ref('l10n_hu_969', raise_if_not_found=False)
+            loss_account = self.env['account.chart.template'].with_company(company).ref('l10n_hu_869', raise_if_not_found=False)
+            rounding_method = self.env.ref('l10n_hu_edi.cash_rounding_1_huf', raise_if_not_found=False)
+            if profit_account and loss_account and rounding_method:
+                rounding_method.with_company(company).write({
+                    'profit_account_id': profit_account.id,
+                    'loss_account_id': loss_account.id,
+                })
 
-    def _prepare_hu_demo_objects(self):
-        for c in self:
-            profit_account = self.env["account.account"].search(
-                [
-                    ("company_id", "=", c.id),
-                    ("code", "=", "969000"),
-                ],
-                limit=1,
-            )
-            loss_account = self.env["account.account"].search(
-                [
-                    ("company_id", "=", c.id),
-                    ("code", "=", "869000"),
-                ],
-                limit=1,
-            )
+            # Activate cash rounding on the company
+            res_config_id = self.env['res.config.settings'].create({
+                'company_id': company.id,
+                'group_cash_rounding': True,
+            })
+            res_config_id.execute()
 
-            self.env["account.cash.rounding"].create(
-                {
-                    "name": "Kerekítés 1.00-ra",
-                    "rounding": 1.0,
-                    "strategy": "add_invoice_line",
-                    "profit_account_id": profit_account.id,
-                    "loss_account_id": loss_account.id,
-                    "rounding_method": "HALF-UP",
-                }
-            )
+    def write(self, vals):
+        # If we change the company VAT, we should deactivate any credentials with a different VAT number
+        if 'vat' in vals:
+            self.l10n_hu_edi_credentials_ids.sudo().filtered(lambda c: c.vat != vals['vat']).is_active = False
+        return super().write(vals)

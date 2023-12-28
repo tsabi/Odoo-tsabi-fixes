@@ -5,25 +5,17 @@ from odoo import models
 
 
 class SaleOrderLine(models.Model):
-    _inherit = "sale.order.line"
+    _inherit = 'sale.order.line'
 
     def _prepare_invoice_line(self, **optional_values):
-        """Prepare the values to create the new invoice line for a sales order line.
-
-        :param optional_values: any parameter that should be added to the returned invoice line
-        :rtype: dict
-        """
-
+        """ When deducting a down payment, provide a reference to the advance invoice. """
         res = super()._prepare_invoice_line(**optional_values)
 
-        if self.is_downpayment:
-            advanced_invoices = (
-                self.invoice_lines.filtered(lambda line: line.move_id._is_downpayment())
-                .mapped("move_id")
-                .filtered(lambda i: i.state == "posted")
-            )
+        if self.order_id.company_id.country_code == 'HU' and self.is_downpayment:
+            advance_invoices = self.invoice_lines.filtered(lambda line: line.is_downpayment).mapped('move_id') \
+                                   .filtered(lambda m: m.state == 'posted')
 
-            if advanced_invoices:
-                res["name"] = res["name"] + " - " + ", ".join([move.name for move in advanced_invoices])
+            if advance_invoices:
+                res['name'] = res['name'] + ' - ' + ', '.join([move.name for move in advance_invoices])
 
         return res

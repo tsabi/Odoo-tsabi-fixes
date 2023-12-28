@@ -3,26 +3,14 @@
 
 from . import models
 from . import wizard
-from . import demo
-
-from odoo import api, SUPERUSER_ID
 
 
-def init_settings(env):
-    """If the company is localized in Hungary, activate the cash rounding by default."""
-    # The cash rounding is activated by default only if the company is localized in Hungary.
-    for company in env["res.company"].search([("partner_id.country_id.code", "=", "HU")]):
-        res_config_id = env["res.config.settings"].create(
-            {
-                "company_id": company.id,
-                "group_cash_rounding": True,
-                "tax_calculation_rounding_method": "round_globally",
-            }
-        )
-        # We need to call execute, otherwise the "implied_group" in fields are not processed.
-        res_config_id.execute()
+def post_init(env):
+    for company in env['res.company'].search([('chart_template', '=', 'hu')]):
+        # Apply default cash rounding configuration
+        company._l10n_hu_edi_configure_company()
 
-
-def post_init(cr, registry):
-    env = api.Environment(cr, SUPERUSER_ID, {})
-    init_settings(env)
+        # Set Hungarian fields on taxes
+        env['account.chart.template'].with_company(company)._load_data({
+            'account.tax': env['account.chart.template']._get_hu_account_tax()
+        })

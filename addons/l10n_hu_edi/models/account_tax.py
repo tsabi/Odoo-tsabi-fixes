@@ -3,83 +3,57 @@
 
 from odoo import fields, models, api
 
-L10N_HU_TAX_TYPE = [
-    ("VAT", "Normal VAT (percent based)"),
-    ("VAT-AAM", "AAM - Personal tax exemption"),
-    ("VAT-TAM", 'TAM - "tax-exempt activity" or tax-exempt due to being in public interest or special in nature'),
-    ("VAT-KBAET", "KBAET - intra-Community exempt supply, without new means of transport"),
-    ("VAT-KBAUK", "KBAUK - tax-exempt, intra-Community sales of new means of transport"),
-    ("VAT-EAM", "EAM - tax-exempt, extra-Community sales of goods (export of goods to a non-EU country)"),
-    ("VAT-NAM", "NAM - tax-exempt on other grounds related to international transactions"),
-    ("VAT-ATK", "ATK - Outside the scope of VAT"),
-    (
-        "VAT-EUFAD37",
-        "EUFAD37 - Based on section 37 of the VAT Act, a reverse charge transaction carried out in another Member State",
-    ),
-    (
-        "VAT-EUFADE",
-        "EUFADE - Reverse charge transaction carried out in another Member State, not subject to Section 37 of the VAT Act",
-    ),
-    ("VAT-EUE", "EUE - Non-reverse charge transaction performed in another Member State"),
-    ("VAT-HO", "HO - Transaction in a third country"),
+_SELECTION_TAX_TYPE = [
+    ('VAT', 'Normal VAT (percent based)'),
+    ('AAM', 'AAM - Personal tax exemption'),
+    ('TAM', 'TAM - tax-exempt activity or tax-exempt due to being in public interest or special in nature'),
+    ('KBAET', 'KBAET - intra-Community exempt supply, without new means of transport'),
+    ('KBAUK', 'KBAUK - tax-exempt, intra-Community sales of new means of transport'),
+    ('EAM', 'EAM - tax-exempt, extra-Community sales of goods (export of goods to a non-EU country)'),
+    ('NAM', 'NAM - tax-exempt on other grounds related to international transactions'),
+    ('ATK', 'ATK - Outside the scope of VAT'),
+    ('EUFAD37', 'EUFAD37 - Based on section 37 of the VAT Act, a reverse charge transaction carried out in another Member State'),
+    ('EUFADE', 'EUFADE - Reverse charge transaction carried out in another Member State, not subject to Section 37 of the VAT Act'),
+    ('EUE', 'EUE - Non-reverse charge transaction performed in another Member State'),
+    ('HO', 'HO - Transaction in a third country'),
+    ('DOMESTIC_REVERSE', 'DOMESTIC_REVERSE - Domestic reverse-charge regime'),
+    ('TRAVEL_AGENCY', 'TRAVEL_AGENCY - Profit-margin based regime for travel agencies'),
+    ('SECOND_HAND', 'SECOND_HAND - Profit-margin based regime for second-hand sales'),
+    ('ARTWORK', 'ARTWORK - Profit-margin based regime for artwork sales'),
+    ('ANTIQUES', 'ANTIQUES - Profit-margin based regime for antique sales'),
+    ('REFUNDABLE_VAT', 'REFUNDABLE_VAT - VAT incurred under sections 11 or 14, without an agreement from the beneficiary to reimburse VAT'),
+    ('NONREFUNDABLE_VAT', 'NONREFUNDABLE_VAT - VAT incurred under sections 11 or 14, with an agreement from the beneficiary to reimburse VAT'),
+    ('NO_VAT', 'VAT not applicable pursuant to section 17 of the VAT Act'),
 ]
 
+_DEFAULT_TAX_REASONS = {
+    'AAM': 'AAM Alanyi adómentes',
+    'TAM': 'TAM Tárgyi adómentes',
+    'KBAET': 'KBAET EU-ba eladás - ÁFA tv.89.§',
+    'KBAUK': 'KBAUK Új közlekedési eszköz EU-n belülre - ÁFA tv.89.§(2)',
+    'EAM': 'EAM Termékexport 3.országba - ÁFA tv.98-109.§',
+    'NAM': 'NAM egyéb export ügylet ÁFA tv 110-118.§',
+    'ATK': 'ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§',
+    'EUFAD37': 'EUFAD37 ÁFA tv. 37.§ (1) Fordított ÁFA másik EU-s országban',
+    'EUFADE': 'EUFADE Fordított ÁFA másik EU-s országban nem ÁFA tv. 37.§ (1)',
+    'EUE': 'EUE 2.EU-s országban teljesített eladás',
+    'HO': 'HO Szolgáltatás 3.országba',
+}
 
 class AccountTax(models.Model):
-    _inherit = "account.tax"
+    _inherit = 'account.tax'
 
     l10n_hu_tax_type = fields.Selection(
-        L10N_HU_TAX_TYPE,
-        string="Hungarian Tax Type",
-        help="Precise identification of the tax for the hungarian authority",
+        _SELECTION_TAX_TYPE,
+        string='(HU) VAT Tax Type',
+        help='Precise identification of the VAT tax for the Hungarian authority.',
     )
-    l10n_hu_tax_reason = fields.Char("Hungarian Tax Description")
+    l10n_hu_tax_reason = fields.Char(
+        string='(HU) VAT Tax Exemption Reason',
+        help='May be used to provide support for the use of a VAT-exempt VAT tax type.',
+    )
 
-    @api.onchange("l10n_hu_tax_type")
+    @api.onchange('l10n_hu_tax_type')
     def l10n_hu_change_vat_type(self):
         for tax in self:
-            if tax.l10n_hu_tax_type == "VAT":
-                tax.l10n_hu_tax_reason = None
-            if tax.l10n_hu_tax_type == "VAT-AAM":
-                tax.l10n_hu_tax_reason = "AAM Alanyi adómentes"
-            if tax.l10n_hu_tax_type == "VAT-TAM":
-                tax.l10n_hu_tax_reason = "TAM Tárgyi adómentes"
-            if tax.l10n_hu_tax_type == "VAT-KBAET":
-                tax.l10n_hu_tax_reason = "KBAET EU-ba eladás - ÁFA tv.89.§"
-            if tax.l10n_hu_tax_type == "VAT-KBAUK":
-                tax.l10n_hu_tax_reason = "KBAUK Új közlekedési eszköz EU-n belülre - ÁFA tv.89.§(2)"
-            if tax.l10n_hu_tax_type == "VAT-EAM":
-                tax.l10n_hu_tax_reason = "EAM Termékexport 3.országba - ÁFA tv.98-109.§"
-            if tax.l10n_hu_tax_type == "VAT-NAM":
-                tax.l10n_hu_tax_reason = "NAM egyéb export ügylet ÁFA tv 110-118.§"
-            if tax.l10n_hu_tax_type == "VAT-ATK":
-                tax.l10n_hu_tax_reason = "ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§"
-            if tax.l10n_hu_tax_type == "VAT-EUFAD37":
-                tax.l10n_hu_tax_reason = "EUFAD37 ÁFA tv. 37.§ (1) Fordított ÁFA másik EU-s országban"
-            if tax.l10n_hu_tax_type == "VAT-EUFADE":
-                tax.l10n_hu_tax_reason = "EUFADE Fordított ÁFA másik EU-s országban nem ÁFA tv. 37.§ (1)"
-            if tax.l10n_hu_tax_type == "VAT-EUE":
-                tax.l10n_hu_tax_reason = "EUE 2.EU-s országban teljesített eladás"
-            if tax.l10n_hu_tax_type == "VAT-HO":
-                tax.l10n_hu_tax_reason = "HO Szolgáltatás 3.országba"
-
-
-class AccountTaxTemplate(models.Model):
-    _inherit = "account.tax.template"
-
-    l10n_hu_tax_type = fields.Selection(
-        L10N_HU_TAX_TYPE,
-        string="Hungarian Tax Type",
-        help="Precise identification of the tax for the hungarian authority",
-    )
-    l10n_hu_tax_reason = fields.Char("Hungarian Tax Description")
-
-    def _get_tax_vals(self, company, tax_template_to_tax):
-        vals = super(AccountTaxTemplate, self)._get_tax_vals(company, tax_template_to_tax)
-        vals.update(
-            {
-                "l10n_hu_tax_type": self.l10n_hu_tax_type,
-                "l10n_hu_tax_reason": self.l10n_hu_tax_reason,
-            }
-        )
-        return vals
+            tax.l10n_hu_tax_reason = _DEFAULT_TAX_REASONS.get(tax.l10n_hu_tax_type, False)

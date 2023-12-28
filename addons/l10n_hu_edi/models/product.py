@@ -5,20 +5,23 @@ from odoo import fields, models
 
 
 class ProductTemplate(models.Model):
-    _inherit = "product.template"
+    _inherit = 'product.template'
 
     l10n_hu_product_code_type = fields.Selection(
-        [
-            ("VTSZ", "VTSZ"),
-            ("TESZOR", "TESZOR"),
-            ("KN", "KN"),
-            ("AHK", "AHK"),
-            ("KT", "KT"),
-            ("CSK", "CSK"),
-            ("EJ", "EJ"),
-            ("OWN", "OWN"),
-            ("OTHER", "OTHER"),
+        selection=[
+            ('VTSZ', 'VTSZ'),
+            ('TESZOR', 'TESZOR'),
+            ('KN', 'KN'),
+            ('AHK', 'AHK'),
+            ('KT', 'KT'),
+            ('CSK', 'CSK'),
+            ('EJ', 'EJ'),
+            ('OTHER', 'OTHER'),
         ],
-        string="Product Code Type",
+        string='(HU) Product Code Type',
+        help='If your product has a code in a standard nomenclature, you can indicate which nomenclature here.',
     )
-    l10n_hu_product_code = fields.Char("Product Code")
+    l10n_hu_product_code = fields.Char(
+        string='(HU) Product Code Value',
+        help='If your product has a code in a standard nomenclature, you can indicate its code here.',
+    )
