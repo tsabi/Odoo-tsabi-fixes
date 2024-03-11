@@ -22,7 +22,7 @@
         <ns2:softwareDevCountryCode>HU</ns2:softwareDevCountryCode>
         <ns2:softwareDevTaxNumber>32226375</ns2:softwareDevTaxNumber>
     </ns2:software>
-    <ns2:encodedExchangeToken>encoded_token</ns2:encodedExchangeToken>
+    <ns2:encodedExchangeToken>ShIyfehpMiisaTM0alDue5QNyEbZCpU1y0lYO1qYDKUdEj79wJsXJ7ZkxeV7OhiKjmTOhz8XTbskI/zYFFgOFQ==</ns2:encodedExchangeToken>
     <ns2:tokenValidityFrom>2024-01-25T15:28:58.995Z</ns2:tokenValidityFrom>
     <ns2:tokenValidityTo>2024-01-25T15:33:58.995Z</ns2:tokenValidityTo>
 </ns2:TokenExchangeResponse>

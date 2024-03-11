@@ -5,13 +5,16 @@ from odoo import fields, models, api, _
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, groupby
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
-from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnectionError
 
 import base64
 import math
 from lxml import etree
 import logging
 import re
+from datetime import timedelta
+import contextlib
+from psycopg2 import OperationalError
 
 _logger = logging.getLogger(__name__)
 
@@ -19,75 +22,147 @@ _logger = logging.getLogger(__name__)
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    # === Technical fields === #
+    # === EDI Fields === #
+    l10n_hu_edi_state = fields.Selection(
+        ######################################################################################################
+        # STATE DIAGRAM
+        # * False --[start]--> to_send
+        # * to_send --[upload]--> to_send, sent, send_timeout
+        # * sent --[query_status]--> sent, confirmed, confirmed_warning, rejected
+        # * send_timeout --[recover_timeout]--> to_send, send_timeout, confirmed, confirmed_warning, rejected
+        # * confirmed, confirmed_warning, rejected: are final states
+        ######################################################################################################
+        selection=[
+            ('to_send', 'To Send'),
+            ('sent', 'Sent, waiting for response'),
+            ('send_timeout', 'Timeout when sending'),
+            ('confirmed', 'Confirmed'),
+            ('confirmed_warning', 'Confirmed with warnings'),
+            ('rejected', 'Rejected')
+        ],
+        string='NAV 3.0 status',
+        copy=False,
+        index='btree_not_null',
+    )
+    l10n_hu_edi_credentials_id = fields.Many2one(
+        comodel_name='l10n_hu_edi.credentials',
+        string='Credentials',
+        copy=False,
+        index='btree_not_null',
+    )
+    l10n_hu_edi_batch_upload_index = fields.Integer(
+        string='Index of invoice within a batch upload',
+        copy=False,
+    )
+    l10n_hu_edi_attachment = fields.Binary(
+        string='Invoice XML file',
+        attachment=True,
+        copy=False,
+    )
+    l10n_hu_edi_send_time = fields.Datetime(
+        string='Invoice upload time',
+        copy=False,
+    )
+    l10n_hu_edi_transaction_code = fields.Char(
+        string='Transaction Code',
+        index='trigram',
+        copy=False,
+    )
+    l10n_hu_edi_messages = fields.Json(
+        string='Transaction messages (JSON)',
+        copy=False,
+    )
     l10n_hu_invoice_chain_index = fields.Integer(
-        string='(HU) Invoice Chain Index',
+        string='Invoice Chain Index',
         help='For base invoices: the length of the chain. For modification invoices: the index in the chain.',
         copy=False,
     )
-    l10n_hu_edi_transaction_ids = fields.One2many(
-        comodel_name='l10n_hu_edi.transaction',
-        inverse_name='invoice_id',
-        string='(HU) Upload Transaction History',
-        copy=False,
-    )
-    l10n_hu_edi_active_transaction_id = fields.Many2one(
-        comodel_name='l10n_hu_edi.transaction',
-        string='(HU) Active Upload Transaction',
-        compute='_compute_l10n_hu_edi_active_transaction_id',
-        search='_search_l10n_hu_edi_active_transaction_id',
-    )
     l10n_hu_edi_credentials_mode = fields.Selection(
-        related='l10n_hu_edi_active_transaction_id.credentials_mode',
+        related='l10n_hu_edi_credentials_id.mode',
+    )
+    l10n_hu_edi_credentials_username = fields.Char(
+        related='l10n_hu_edi_credentials_id.username',
+    )
+    l10n_hu_edi_attachment_filename = fields.Char(
+        string='Invoice XML filename',
+        compute='_compute_l10n_hu_edi_attachment_filename',
+    )
+    l10n_hu_edi_message_html = fields.Html(
+        string='Transaction messages',
+        compute='_compute_message_html',
     )
 
     # === Constraints === #
 
-    @api.constrains('l10n_hu_edi_transaction_ids', 'state')
-    def _check_only_one_active_transaction(self):
-        """ Enforce the constraint that posted invoices have at most one active transaction,
-        and draft invoices and cancelled invoices have no active transactions.
-        This means that you cannot create a transaction on an invoice if it already has an active transaction,
-        and you cannot reset to draft / cancel a posted invoice if it still has an active transaction.
-        """
+    @api.constrains('l10n_hu_edi_state', 'state')
+    def _check_posted_if_active(self):
+        """ Enforce the constraint that you cannot reset to draft / cancel a posted invoice if it was already sent to NAV. """
         for move in self:
-            num_active_transactions = len(move.l10n_hu_edi_transaction_ids.filtered(lambda t: t.is_active))
-            if num_active_transactions > 1:
-                raise ValidationError(_('Cannot create a new NAV transaction for an invoice while an existing transaction is active!'))
-            if move.state in ['draft', 'cancel'] and num_active_transactions > 0:
+            if move.state in ['draft', 'cancel'] and move.l10n_hu_edi_state:
                 raise ValidationError(_('Cannot reset to draft or cancel invoice %s because an electronic document was already sent to NAV!', move.name))
 
     # === Computes / Getters === #
 
-    @api.depends('l10n_hu_edi_transaction_ids')
-    def _compute_l10n_hu_edi_active_transaction_id(self):
-        """ A move's active transaction is the only one in a state that still has the potential to be confirmed/rejected. """
+    @api.depends('l10n_hu_edi_messages')
+    def _compute_message_html(self):
         for move in self:
-            move.l10n_hu_edi_active_transaction_id = move.l10n_hu_edi_transaction_ids.filtered(lambda t: t.is_active)
+            if move.l10n_hu_edi_messages:
+                move.l10n_hu_edi_message_html = self.env['account.move.send']._format_error_html(move.l10n_hu_edi_messages)
+            else:
+                move.l10n_hu_edi_message_html = False
 
-    @api.model
-    def _search_l10n_hu_edi_active_transaction_id(self, operator, value):
-        return ['&', ('l10n_hu_edi_transaction_ids', operator, value), ('l10n_hu_edi_transaction_ids.is_active', '=', True)]
-
-    @api.depends('l10n_hu_edi_active_transaction_id.state', 'state')
+    @api.depends('l10n_hu_edi_state', 'state')
     def _compute_show_reset_to_draft_button(self):
         super()._compute_show_reset_to_draft_button()
-        self.filtered(lambda m: not m.l10n_hu_edi_active_transaction_id._can_perform('abort')).show_reset_to_draft_button = False
+        self.filtered(lambda m: m.l10n_hu_edi_state not in [False, 'to_send', 'rejected']).show_reset_to_draft_button = False
+
+    @api.depends('name')
+    def _compute_l10n_hu_edi_attachment_filename(self):
+        for move in self:
+            move.l10n_hu_edi_attachment_filename = f'{move.name.replace("/", "_")}.xml'
+
+    def _l10n_hu_edi_can_process(self, action=None, raise_if_cannot=False):
+        """ Returns whether an action may be performed on a given invoice, given its state.
+        If action is None, returns whether any action may be performed.
+        """
+        if not self:
+            return True
+        valid_states = {
+            'start': False,
+            'upload': 'to_send',
+            'query_status': 'sent',
+            'recover_timeout': 'send_timeout',
+        }
+        can_process = all(
+            move.country_code == 'HU'
+            and move.is_sale_document()
+            and move.state == 'posted'
+            and (
+                action is None and move.l10n_hu_edi_state in valid_states.values()
+                or move.l10n_hu_edi_state == valid_states.get(action)
+            )
+            # Ensure that invoices created before l10n_hu_edi is installed can't be sent.
+            and move.l10n_hu_invoice_chain_index is not False
+            for move in self
+        )
+        if raise_if_cannot and not can_process:
+            raise UserError(_('Invalid start states %s for action %s!', self.mapped('l10n_hu_edi_state'), action))
+        return can_process
 
     def _l10n_hu_get_chain_base(self):
         """ Get the base invoice of the invoice chain, or None if this is already a base invoice. """
         self.ensure_one()
         base_invoice = self
-        while base_invoice.reversed_entry_id:
-            base_invoice = base_invoice.reversed_entry_id
+        while base_invoice.reversed_entry_id or base_invoice.debit_origin_id:
+            base_invoice = base_invoice.reversed_entry_id or base_invoice.debit_origin_id
         return base_invoice if base_invoice != self else None
 
     def _l10n_hu_get_chain_invoices(self):
         """ Given a base invoice, get all invoices in the chain. """
         self.ensure_one()
         chain_invoices = self
-        while chain_invoices != chain_invoices | chain_invoices.reversal_move_id:
-            chain_invoices = chain_invoices | chain_invoices.reversal_move_id
+        while chain_invoices != chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids:
+            chain_invoices = chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids
         return chain_invoices - self
 
     def _l10n_hu_get_currency_rate(self):
@@ -111,39 +186,24 @@ class AccountMove(models.Model):
             date=self.invoice_date,
         )
 
-    def _l10n_hu_edi_can_create_transaction(self):
-        """ Determines whether a new NAV 3.0 transaction can be created for this invoice """
-        self.ensure_one()
-        return (
-            self.country_code == 'HU'
-            and self.is_sale_document()
-            and self.state == 'posted'
-            and not self.l10n_hu_edi_active_transaction_id
-            # Ensure that invoices created before l10n_hu_edi is installed can't be sent.
-            and self.l10n_hu_invoice_chain_index is not False
-        )
-
-    def _l10n_hu_edi_can_process(self):
-        """ Determines whether any NAV 3.0 flow is applicable to this invoice """
-        self.ensure_one()
-        return (
-            self._l10n_hu_edi_can_create_transaction()
-            or (
-                self.l10n_hu_edi_active_transaction_id
-                and self.l10n_hu_edi_active_transaction_id.state not in ['confirmed', 'confirmed_warning']
-            )
-        )
-
     # === Overrides === #
 
     def button_draft(self):
         # EXTEND account
-        self.l10n_hu_edi_active_transaction_id.filtered(lambda t: t._can_perform('abort')).abort()
+        self.filtered(lambda m: m.l10n_hu_edi_state in ['to_send', 'rejected']).write({
+            'l10n_hu_edi_state': False,
+            'l10n_hu_edi_credentials_id': False,
+            'l10n_hu_edi_batch_upload_index': False,
+            'l10n_hu_edi_attachment': False,
+            'l10n_hu_edi_send_time': False,
+            'l10n_hu_edi_transaction_code': False,
+            'l10n_hu_edi_messages': False,
+        })
         return super().button_draft()
 
     def action_reverse(self):
         # EXTEND account
-        unconfirmed = self.filtered(lambda m: m._l10n_hu_edi_can_process())
+        unconfirmed = self.filtered(lambda m: m.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning'])
         if unconfirmed:
             raise UserError(_(
                 'Invoices %s have not yet been confirmed by NAV. Please wait for confirmation before issuing a modification invoice.',
@@ -203,7 +263,7 @@ class AccountMove(models.Model):
                 'message': _('Please set company VAT number!'),
                 'action_text': _('View Company/ies'),
             },
-            'company_vat_address': {
+            'company_vat_invalid': {
                 'records': self.company_id.filtered(
                     lambda c: (
                         c.vat and not hu_vat_regex.fullmatch(c.vat)
@@ -300,21 +360,278 @@ class AccountMove(models.Model):
 
         return errors
 
-    def _l10n_hu_edi_create_transactions(self):
+    def _l10n_hu_edi_start(self):
+        """ Generate the invoice XMLs and queue them for sending. """
+        self._l10n_hu_edi_can_process('start', raise_if_cannot=True)
         for invoice in self:
             if not invoice.company_id.l10n_hu_edi_primary_credentials_id:
                 raise UserError(_('Please set NAV credentials in the Accounting Settings!'))
-            self.env['l10n_hu_edi.transaction'].create({
-                'invoice_id': invoice.id,
-                'credentials_id': invoice.company_id.l10n_hu_edi_primary_credentials_id.id,
-                'operation': 'MODIFY' if invoice.reversed_entry_id else 'CREATE',
-                'attachment_file': base64.b64encode(invoice._l10n_hu_edi_generate_xml()),
+            invoice.write({
+                'l10n_hu_edi_state': 'to_send',
+                'l10n_hu_edi_credentials_id': invoice.company_id.l10n_hu_edi_primary_credentials_id.id,
+                'l10n_hu_edi_attachment': base64.b64encode(invoice._l10n_hu_edi_generate_xml()),
+            })
+            # Set name & mimetype on newly-created attachment.
+            attachment = self.env['ir.attachment'].search([
+                ('res_model', '=', self._name),
+                ('res_id', 'in', self.ids),
+                ('res_field', '=', 'l10n_hu_edi_attachment'),
+            ])
+            attachment.write({
+                'name': invoice.l10n_hu_edi_attachment_filename,
+                'mimetype': 'application/xml',
             })
 
-    def _l10n_hu_edi_cleanup_old_transactions(self):
-        for invoice in self:
-            # Remove any rejected transaction except if it is the latest transaction
-            invoice.l10n_hu_edi_transaction_ids[1:].filtered(lambda t: t.state == 'rejected').unlink()
+    def _l10n_hu_edi_upload(self):
+        """ Send the invoice XMLs to NAV. """
+        self._l10n_hu_edi_can_process('upload', raise_if_cannot=True)
+        with self._l10n_hu_edi_acquire_lock():
+            # Batch by credentials, with max 100 invoices per batch.
+            for __, batch_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
+                for __, batch in groupby(enumerate(batch_credentials), lambda x: x[0] // 100):
+                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch()
+
+    def _l10n_hu_edi_upload_single_batch(self):
+        self._l10n_hu_edi_can_process('upload', raise_if_cannot=True)
+        for i, invoice in enumerate(self, start=1):
+            invoice.l10n_hu_edi_batch_upload_index = i
+
+        invoice_operations = [
+            {
+                'index': invoice.l10n_hu_edi_batch_upload_index,
+                'operation': 'MODIFY' if invoice.reversed_entry_id or invoice.debit_origin_id else 'CREATE',
+                'invoice_data': base64.b64decode(invoice.l10n_hu_edi_attachment),
+            }
+            for invoice in self
+        ]
+
+        try:
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.l10n_hu_edi_credentials_id.sudo())
+        except L10nHuEdiConnectionError as e:
+            return self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
+        self.write({'l10n_hu_edi_send_time': fields.Datetime.now()})
+
+        try:
+            transaction_code = self.env['l10n_hu_edi.connection']._do_manage_invoice(
+                self.l10n_hu_edi_credentials_id.sudo(),
+                token_result['token'],
+                invoice_operations,
+            )
+        except L10nHuEdiConnectionError as e:
+            if e.code == 'timeout':
+                return self.write({
+                    'l10n_hu_edi_state': 'send_timeout',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('Invoice submission timed out.'),
+                        'errors': e.errors,
+                    },
+                })
+            return self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('Invoice submission failed.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
+        self.write({
+            'l10n_hu_edi_state': 'sent',
+            'l10n_hu_edi_transaction_code': transaction_code,
+            'l10n_hu_edi_messages': {
+                'error_title': _('Invoice submitted, waiting for response.'),
+                'errors': [],
+            }
+        })
+
+    def _l10n_hu_edi_query_status(self):
+        """ Check the NAV invoice status. """
+        # We should update all invoices with the same credentials and transaction code at once.
+        self |= self.search([
+            ('l10n_hu_edi_credentials_id', 'in', self.l10n_hu_edi_credentials_id.ids),
+            ('l10n_hu_edi_transaction_code', 'in', self.mapped('l10n_hu_edi_transaction_code')),
+            ('l10n_hu_edi_state', '=', 'sent'),
+        ])
+        self._l10n_hu_edi_can_process('query_status', raise_if_cannot=True)
+
+        with self._l10n_hu_edi_acquire_lock():
+            # Querying status should be grouped by credentials and transaction code
+            for __, invoices in groupby(self, lambda m: (m.l10n_hu_edi_credentials_id, m.l10n_hu_edi_transaction_code)):
+                self.env['account.move'].browse([m.id for m in invoices])._l10n_hu_edi_query_status_single_batch()
+
+    def _l10n_hu_edi_query_status_single_batch(self):
+        """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
+        self._l10n_hu_edi_can_process('query_status', raise_if_cannot=True)
+        try:
+            invoices_results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+                self.l10n_hu_edi_credentials_id.sudo(),
+                self[0].l10n_hu_edi_transaction_code,
+            )
+        except L10nHuEdiConnectionError as e:
+            return self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('The invoice was sent to the NAV, but there was an error querying its status.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
+        for invoice_result in invoices_results:
+            invoice = self.filtered(lambda m: str(m.l10n_hu_edi_batch_upload_index) == invoice_result['index'])
+            if not invoice:
+                _logger.error(_('Could not match NAV transaction_code %s, index %s to an invoice in Odoo', self[0].l10n_hu_edi_transaction_code, invoice_result['index']))
+                continue
+
+            invoice._l10n_hu_edi_process_query_transaction_result(invoice_result)
+
+    def _l10n_hu_edi_process_query_transaction_result(self, invoice_result):
+        def get_errors_from_invoice_result(invoice_result):
+            return [
+                f'({message["validation_result_code"]}) {message["validation_error_code"]}: {message["message"]}'
+                for message in invoice_result.get('business_validation_messages', []) + invoice_result.get('technical_validation_messages', [])
+            ]
+
+        self.ensure_one()
+        if invoice_result['invoice_status'] in ['RECEIVED', 'PROCESSING', 'SAVED']:
+            # The invoice has not been processed yet, which corresponds to state='sent'.
+            if self.l10n_hu_edi_state != 'sent':
+                # This is triggered if we come from the send_timeout state
+                self.write({
+                    'l10n_hu_edi_state': 'sent',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The invoice was sent to the NAV, waiting for reply.'),
+                        'errors': [],
+                    },
+                })
+
+        elif invoice_result['invoice_status'] == 'DONE':
+            if not invoice_result['business_validation_messages'] and not invoice_result['technical_validation_messages']:
+                self.write({
+                    'l10n_hu_edi_state': 'confirmed',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The invoice was successfully accepted by the NAV.'),
+                        'errors': [],
+                    },
+                })
+            else:
+                self.write({
+                    'l10n_hu_edi_state': 'confirmed_warning',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The invoice was accepted by the NAV, but warnings were reported. To reverse, create a credit note.'),
+                        'errors': get_errors_from_invoice_result(invoice_result),
+                    },
+                })
+
+        elif invoice_result['invoice_status'] == 'ABORTED':
+            self.write({
+                'l10n_hu_edi_state': 'rejected',
+                'l10n_hu_edi_messages': {
+                    'error_title': _('The invoice was rejected by the NAV.'),
+                    'errors': get_errors_from_invoice_result(invoice_result),
+                    'blocking_level': 'error',
+                },
+            })
+
+        else:
+            self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('NAV returned a non-standard invoice status: %s', invoice_result['invoice_status']),
+                    'errors': [],
+                    'blocking_level': 'error',
+                },
+            })
+
+    def _l10n_hu_edi_recover_timeout(self):
+        """ Attempt to recover all invoices in `self` from an upload timeout """
+        # Only attempt to recover from a timeout for invoices sent more than 6 minutes ago.
+        self._l10n_hu_edi_can_process('recover_timeout', raise_if_cannot=True)
+        self = self.filtered(lambda m: m.l10n_hu_edi_send_time <= fields.Datetime.now() - timedelta(minutes=6))
+        with self._l10n_hu_edi_acquire_lock():
+            # Group by credentials.
+            for __, invoices_by_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
+                # Further group by 7-minute time intervals (more precisely, time intervals which don't have more than 7 minutes between missing invoices)
+                time_interval_groups = []
+                for invoice in sorted(invoices_by_credentials, key=lambda m: m.l10n_hu_edi_send_time):
+                    if not time_interval_groups or invoice.l10n_hu_edi_send_time >= time_interval_groups[-1][-1].l10n_hu_edi_send_time + timedelta(minutes=5):
+                        time_interval_groups.append(invoice)
+                    else:
+                        time_interval_groups[-1] += invoice
+
+                for invoices in time_interval_groups:
+                    invoices._l10n_hu_edi_recover_timeout_single_batch()
+
+    def _l10n_hu_edi_recover_timeout_single_batch(self):
+        self._l10n_hu_edi_can_process('recover_timeout', raise_if_cannot=True)
+        datetime_from = min(self.mapped('l10n_hu_edi_send_time'))
+        datetime_to = max(self.mapped('l10n_hu_edi_send_time')) + timedelta(minutes=7)
+
+        page = 1
+        available_pages = 1
+
+        while page <= available_pages:
+            try:
+                transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(self.l10n_hu_edi_credentials_id.sudo(), datetime_from, datetime_to, page)
+            except L10nHuEdiConnectionError as e:
+                return self.write({
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('Error querying active transactions while attempting timeout recovery.'),
+                        'errors': e.errors,
+                        'blocking_level': 'error',
+                    },
+                })
+
+            transaction_codes_to_query = [
+                t['transaction_code']
+                for t in transaction_list['transactions']
+                if t['username'] == self.l10n_hu_edi_credentials_username
+                   and t['source'] == 'MGM'
+            ]
+
+            for transaction_code in transaction_codes_to_query:
+                try:
+                    invoices_results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+                        self.l10n_hu_edi_credentials_id.sudo(),
+                        transaction_code,
+                        return_original_request=True,
+                    )
+                except L10nHuEdiConnectionError as e:
+                    return self.write({
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('Error querying active transactions while attempting timeout recovery.'),
+                            'errors': e.errors,
+                            'blocking_level': 'error',
+                        },
+                    })
+
+                for invoice_result in invoices_results:
+                    # Match invoice if the returned XML is the same as the one stored in Odoo.
+                    matched_invoice = self.filtered(
+                        lambda m: etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
+                                  == etree.canonicalize(invoice_result['original_invoice_file'])
+                    )
+
+                    if matched_invoice:
+                        # Set the correct transaction code on the matched invoice
+                        matched_invoice.l10n_hu_edi_transaction_code = transaction_code
+                        matched_invoice._l10n_hu_edi_process_query_transaction_result(invoice_result)
+
+            available_pages = transaction_list['available_pages']
+            page += 1
+
+        # Any invoices that could not be matched to the query results should be regarded as not received by NAV.
+        self.filtered(lambda m: m.l10n_hu_edi_state == 'send_timeout').write({
+            'l10n_hu_edi_state': 'to_send',
+            'l10n_hu_edi_messages': {
+                'error_title': _('Sending failed due to time-out.'),
+                'errors': [],
+            }
+        })
 
     # === EDI: XML generation === #
 
@@ -392,6 +709,21 @@ class AccountMove(models.Model):
                 'lineNatureIndicator': {False: 'OTHER', 'service': 'SERVICE'}.get(line.product_id.type, 'PRODUCT'),
                 'lineDescription': line.name.replace('\n', ' '),
             }
+
+            # Advance invoices case 1: this is an advance invoice
+            with contextlib.suppress(AttributeError):
+                if line.is_downpayment:
+                    line_values['advanceIndicator'] = True
+
+            # Advance invoices case 2: this is a final invoice that deducts an advance invoice
+            advance_invoices = line._get_downpayment_lines().mapped('move_id').filtered(lambda m: m.state == 'posted')
+            if advance_invoices:
+                line_values.update({
+                    'advanceIndicator': True,
+                    'advanceOriginalInvoice': advance_invoices[0].name,
+                    'advancePaymentDate': advance_invoices[0].invoice_date,
+                    'advanceExchangeRate': advance_invoices[0]._l10n_hu_get_currency_rate(),
+                })
 
             if line.display_type == 'product':
                 vat_tax = line.tax_ids.filtered(lambda t: t.l10n_hu_tax_type)
@@ -531,6 +863,27 @@ class AccountMove(models.Model):
         )
 
         return tax_totals
+
+    # === Helpers === #
+
+    @contextlib.contextmanager
+    def _l10n_hu_edi_acquire_lock(self, no_commit=False):
+        """ Acquire a write lock on the invoices in self.
+            On exit, commit to DB unless no_commit is True.
+        """
+        if not self:
+            yield
+            return
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute('SELECT * FROM account_move WHERE id IN %s FOR UPDATE NOWAIT', [tuple(self.ids)])
+        except OperationalError as e:
+            if e.pgcode == '55P03':
+                raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?'))
+            raise
+        yield
+        if self.env['account.move.send']._can_commit() and not no_commit:
+            self.env.cr.commit()
 
 
 class AccountInvoiceLine(models.Model):

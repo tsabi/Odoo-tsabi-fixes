@@ -41,14 +41,14 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
         credit_note = self.create_reversal(invoice)
         with self.set_invoice_name(credit_note, 'RINV/2024/'):
             credit_note.action_post()
             send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(credit_note.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
 
     def test_send_invoice_complex_huf(self):
         invoice = self.create_invoice_complex_huf()
@@ -56,7 +56,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
     def test_send_invoice_complex_eur(self):
         invoice = self.create_invoice_complex_eur()
@@ -64,7 +64,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
     def test_timeout_recovery_fail(self):
         invoice = self.create_invoice_simple()
@@ -74,14 +74,14 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
         with self.patch_call_nav_endpoint('manageInvoice', make_request=False):
             send_and_print.action_send_and_print()
 
-        self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'send_timeout'}])
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
         # Set the send time 6 minutes in the past so the timeout recovery mechanism triggers.
-        invoice.l10n_hu_edi_active_transaction_id.send_time -= timedelta(minutes=6)
+        invoice.l10n_hu_edi_send_time -= timedelta(minutes=6)
         send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
         with contextlib.suppress(UserError):
             send_and_print.action_send_and_print()
-        self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'to_send'}])
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'to_send'}])
 
     def test_timeout_recovery_success(self):
         invoice = self.create_invoice_simple()
@@ -91,13 +91,13 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             with self.patch_call_nav_endpoint('manageInvoice'):
                 send_and_print.action_send_and_print()
 
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'send_timeout'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
             # Set the send time 6 minutes in the past so the timeout recovery mechanism triggers.
-            invoice.l10n_hu_edi_active_transaction_id.send_time -= timedelta(minutes=6)
+            invoice.l10n_hu_edi_send_time -= timedelta(minutes=6)
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
     # === Helpers === #
 
@@ -108,7 +108,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.name = f'{prefix}{last_invoice[prefix]:05}'
             yield
         finally:
-            if invoice.l10n_hu_edi_active_transaction_id.state not in ['confirmed', 'confirmed_warning']:
+            if invoice.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning']:
                 last_invoice[prefix] -= 1
             else:
                 with tools.file_open('l10n_hu_edi/tests/credentials.py', 'a') as credentials_file:

@@ -23,37 +23,34 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
 
     def test_send_invoice_and_credit_note(self):
         with self.patch_post(), \
-                mock.patch('odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection.AES_ECB_Cipher.decrypt', return_value='token', autospec=True), \
                 freeze_time('2024-01-25T15:28:53Z'):
             invoice = self.create_invoice_simple()
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
             credit_note = self.create_reversal(invoice)
             credit_note.action_post()
             send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(credit_note.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
 
     def test_send_invoice_warning(self):
         with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_warning.xml', 'r') as response_file:
             response_data = response_file.read()
         with self.patch_post({'queryTransactionStatus': response_data}), \
-                mock.patch('odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection.AES_ECB_Cipher.decrypt', return_value='token', autospec=True), \
                 freeze_time('2024-01-25T15:28:53Z'):
             invoice = self.create_invoice_simple()
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed_warning'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed_warning'}])
 
     def test_send_invoice_error(self):
         with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_error.xml', 'r') as response_file:
             response_data = response_file.read()
         with self.patch_post({'queryTransactionStatus': response_data}), \
-                mock.patch('odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection.AES_ECB_Cipher.decrypt', return_value='token', autospec=True), \
                 freeze_time('2024-01-25T15:28:53Z'):
             invoice = self.create_invoice_simple()
             invoice.action_post()
@@ -63,14 +60,13 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
 
     def test_timeout_recovery_fail(self):
         with freeze_time('2024-01-25T15:28:53Z'), \
-                self.patch_post({'manageInvoice': requests.Timeout()}), \
-                mock.patch('odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection.AES_ECB_Cipher.decrypt', return_value='token', autospec=True):
+                self.patch_post({'manageInvoice': requests.Timeout()}):
             invoice = self.create_invoice_simple()
             invoice.action_post()
 
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'send_timeout'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
         with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_original.xml', 'r') as response_file:
             response_data = response_file.read()
@@ -80,19 +76,18 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             with contextlib.suppress(UserError):
                 send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'to_send'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'to_send'}])
 
     def test_timeout_recovery_success(self):
         with freeze_time('2024-01-25T15:28:53Z'), \
-                self.patch_post({'manageInvoice': requests.Timeout()}), \
-                mock.patch('odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection.AES_ECB_Cipher.decrypt', return_value='token', autospec=True):
+                self.patch_post({'manageInvoice': requests.Timeout()}):
             invoice = self.create_invoice_simple()
             invoice.name = 'INV/2024/00999'  # This matches the invoice name in the XML returned by queryTransactionStatus.
             invoice.action_post()
 
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'send_timeout'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
         # This returns an original XML with name INV/2024/00999
         with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_original.xml', 'r') as response_file:
@@ -103,7 +98,7 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
                 self.patch_post({'queryTransactionStatus': response_data}):
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice.l10n_hu_edi_active_transaction_id, [{'state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
     # === Helpers === #
 

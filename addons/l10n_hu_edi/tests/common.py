@@ -133,7 +133,7 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
                     'username': 'this',
                     'password': 'that',
                     'signature_key': 'some_key',
-                    'replacement_key': 'some_key',
+                    'replacement_key': 'abcdefghijklmnop',
                 }
             ])
 

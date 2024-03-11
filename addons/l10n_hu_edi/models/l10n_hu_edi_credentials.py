@@ -63,10 +63,10 @@ class L10nHuEdiCredentials(models.Model):
         string='Replacement Key',
         required=True
     )
-    transaction_ids = fields.One2many(
-        comodel_name='l10n_hu_edi.transaction',
-        inverse_name='credentials_id',
-        string='Transactions',
+    invoice_ids = fields.One2many(
+        comodel_name='account.move',
+        inverse_name='l10n_hu_edi_credentials_id',
+        string='Invoices',
     )
 
     @api.depends('company_id', 'company_id.l10n_hu_edi_primary_credentials_id')
@@ -90,8 +90,8 @@ class L10nHuEdiCredentials(models.Model):
         return credentials
 
     def write(self, vals):
-        if set(vals.keys()) & _PROTECTED_FIELDS and self.transaction_ids:
-            raise UserError(_('You cannot modify credentials already used in a transaction. Deactivate them instead.'))
+        if set(vals.keys()) & _PROTECTED_FIELDS and self.invoice_ids:
+            raise UserError(_('You cannot modify credentials already used to send an invoice. Deactivate them instead.'))
         if vals.get('is_active'):
             self.test()
         if vals.get('is_active') is False:
@@ -100,14 +100,14 @@ class L10nHuEdiCredentials(models.Model):
 
     @api.ondelete(at_uninstall=False)
     def _unlink_except_used(self):
-        if self.mode == 'production' and self.transaction_ids:
-            raise UserError(_('You cannot delete production credentials already used in a transaction. Deactivate them instead.'))
+        if self.mode == 'production' and self.invoice_ids:
+            raise UserError(_('You cannot delete production credentials already used to send an invoice. Deactivate them instead.'))
 
     def test(self):
         for credentials in self:
             if not credentials.vat:
                 raise UserError(_('NAV Credentials: Please set the hungarian vat number on the company first!'))
             try:
-                self.env['l10n_hu_edi.connection'].do_token_exchange(credentials)
+                self.env['l10n_hu_edi.connection']._do_token_exchange(credentials)
             except L10nHuEdiConnectionError as e:
                 raise UserError(_('NAV Credentials: Error from NAV: %s', e))

@@ -4,14 +4,15 @@
 from odoo import models, api, _, release
 from odoo.tools import cleanup_xml_node
 
-from cryptography.hazmat.primitives import hashes, ciphers
+from cryptography.hazmat.primitives import hashes, padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 from base64 import b64decode, b64encode
 import datetime
 import dateutil.parser
 import uuid
 import requests
 import binascii
-import contextlib
 from lxml import etree
 
 import logging
@@ -37,41 +38,6 @@ class L10nHuEdiConnectionError(Exception):
         return '\n'.join(self.errors)
 
 
-class AES_ECB_Cipher(object):
-    """
-    Usage:
-        c = AES_ECB_Cipher('password').encrypt('message')
-        m = AES_ECB_Cipher('password').decrypt(c)
-    Tested under Python 3.10.10 and cryptography==3.4.8.
-    """
-
-    def __init__(self, key):
-        self.bs = int(ciphers.algorithms.AES.block_size / 8)
-        self.key = key.encode()
-
-    def encrypt(self, message):
-        encryptor = self._get_cipher().encryptor()
-        ct = encryptor.update(self._pad(message).encode()) + encryptor.finalize()
-        return b64encode(ct).decode('utf-8')
-
-    def decrypt(self, enc):
-        decryptor = self._get_cipher().decryptor()
-        with contextlib.suppress(binascii.Error):
-            enc = b64decode(enc)
-        ct = decryptor.update(enc) + decryptor.finalize()
-        return self._unpad(ct).decode('utf-8')
-
-    def _get_cipher(self):
-        return ciphers.Cipher(ciphers.algorithms.AES(self.key), ciphers.modes.ECB())
-
-    def _pad(self, s):
-        return s + (self.bs - len(s) % self.bs) * chr(self.bs - len(s) % self.bs)
-
-    @staticmethod
-    def _unpad(s):
-        return s[: -ord(s[len(s) - 1:])]
-
-
 class L10nHuEdiConnection(models.AbstractModel):
     _name = 'l10n_hu_edi.connection'
     _description = 'Methods to call NAV API endpoints'
@@ -79,12 +45,24 @@ class L10nHuEdiConnection(models.AbstractModel):
     # === API-calling methods === #
 
     @api.model
-    def do_token_exchange(self, credentials):
+    def _do_token_exchange(self, credentials):
         """ Request a token for invoice submission.
         :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :return: a dictionary {'token': str, 'token_validity_to': datetime.datetime}
         :raise: L10nHuEdiConnectionError
         """
+        def decrypt_aes128(key, encrypted_token):
+            """ Decrypt AES-128 encrypted bytes.
+            :param key bytes: the 128-bit key
+            :param encrypted_token bytes: the bytes to decrypt
+            :return: the decrypted bytes
+            """
+            decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
+            decrypted_token = decryptor.update(encrypted_token) + decryptor.finalize()
+            unpadder = padding.PKCS7(128).unpadder()
+            unpadded_token = unpadder.update(decrypted_token) + unpadder.finalize()
+            return unpadded_token
+
         template_values = self._get_header_values(credentials)
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.token_exchange_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
@@ -92,7 +70,7 @@ class L10nHuEdiConnection(models.AbstractModel):
         status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'tokenExchange', request_data)
         self._parse_error_response(status_code, response_xml)
 
-        encoded_token = response_xml.findtext('{*}encodedExchangeToken')
+        encrypted_token = response_xml.findtext('{*}encodedExchangeToken')
         token_validity_to = response_xml.findtext('{*}tokenValidityTo')
         try:
             # Convert into a naive UTC datetime, since Odoo can't store timezone-aware datetimes
@@ -101,21 +79,21 @@ class L10nHuEdiConnection(models.AbstractModel):
             _logger.warning('Could not parse token validity end timestamp!')
             token_validity_to = datetime.datetime.utcnow() + datetime.timedelta(minutes=5)
 
-        if not encoded_token:
+        if not encrypted_token:
             raise L10nHuEdiConnectionError(_('Missing token in response from NAV.'))
 
         try:
-            token = AES_ECB_Cipher(credentials['replacement_key']).decrypt(encoded_token)
+            token = decrypt_aes128(credentials['replacement_key'].encode(), b64decode(encrypted_token.encode())).decode()
         except ValueError:
-            raise L10nHuEdiConnectionError(_('NAV Communication: XML Parse Error during decryption of ExchangeToken'))
+            raise L10nHuEdiConnectionError(_('Error during decryption of ExchangeToken.'))
 
         return {'token': token, 'token_validity_to': token_validity_to}
 
     @api.model
-    def do_manage_invoice(self, credentials, token, invoice_operations):
+    def _do_manage_invoice(self, credentials, token, invoice_operations):
         """ Submit one or more invoices.
         :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
-        :param token: a token obtained via `do_token_exchange`
+        :param token: a token obtained via `_do_token_exchange`
         :param invoice_operations: a list of dictionaries:
             {
                 'index': <index given to invoice>,
@@ -156,7 +134,7 @@ class L10nHuEdiConnection(models.AbstractModel):
         return transaction_code
 
     @api.model
-    def do_query_transaction_status(self, credentials, transaction_code, return_original_request=False):
+    def _do_query_transaction_status(self, credentials, transaction_code, return_original_request=False):
         """ Query the status of a transaction.
         :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param transaction_code: the code of the transaction to query
@@ -197,20 +175,20 @@ class L10nHuEdiConnection(models.AbstractModel):
                 })
             if return_original_request:
                 try:
-                    original_invoice_xml = etree.fromstring(b64decode(invoice_xml.findtext('{*}originalRequest')))
+                    original_invoice_file = b64decode(invoice_xml.findtext('{*}originalRequest')).decode()
                 except binascii.Error as e:
                     raise L10nHuEdiConnectionError(str(e))
-                except etree.ParserError as e:
-                    raise L10nHuEdiConnectionError(str(e))
 
-                invoice_result['original_invoice_xml'] = original_invoice_xml
+                invoice_result.update({
+                    'original_invoice_file': original_invoice_file,
+                })
 
             invoices_results.append(invoice_result)
 
         return invoices_results
 
     @api.model
-    def do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
+    def _do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
         """ Query the transactions that were submitted in a given time interval.
         :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param datetime_from: start of the time interval to query

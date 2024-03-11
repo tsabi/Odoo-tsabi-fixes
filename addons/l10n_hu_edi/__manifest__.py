@@ -12,7 +12,7 @@
 * Perform the Tax Audit Export (Adóhatósági Ellenőrzési Adatszolgáltatás) in NAV 3.0 format.
     """,
     'website': 'https://www.odootech.hu',
-    'depends': ['l10n_hu'],
+    'depends': ['account_debit_note', 'l10n_hu'],
     'data': [
         'security/ir.model.access.csv',
         'data/uom.uom.csv',
@@ -22,7 +22,6 @@
         'data/ir_cron.xml',
         'views/report_templates.xml',
         'views/report_invoice.xml',
-        'views/l10n_hu_edi_transaction_views.xml',
         'views/l10n_hu_edi_credentials_views.xml',
         'views/account_move_views.xml',
         'views/product_template_views.xml',

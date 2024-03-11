@@ -6,7 +6,6 @@ from . import account_tax
 from . import ir_attachment
 from . import l10n_hu_edi_connection
 from . import l10n_hu_edi_credentials
-from . import l10n_hu_edi_transaction
 from . import product
 from . import res_partner
 from . import res_company

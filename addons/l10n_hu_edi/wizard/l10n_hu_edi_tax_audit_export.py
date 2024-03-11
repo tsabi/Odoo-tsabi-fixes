@@ -63,14 +63,21 @@ class L10nHuEdiTaxAuditExport(models.TransientModel):
 
         with tempfile.NamedTemporaryFile(mode='w+b', delete=True) as buf:
             with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED, allowZip64=False) as zf:
-                # We might need to set the chain index and line numbers on invoices created before l10n_hu_edi was installed.
-                # We do this temporarily for the purposes of the data export.
+                # To correctly generate the XML for invoices created before l10n_hu_edi was installed,
+                # we need to temporarily set the chain index and line numbers, so we do this in a savepoint.
                 with contextlib.closing(self.env.cr.savepoint(flush=False)):
                     for invoice in invoices.sorted(lambda i: i.create_date):
-                        if not invoice.l10n_hu_invoice_chain_index:
-                            invoice._l10n_hu_edi_set_chain_index_and_line_number()
+                        if invoice.l10n_hu_edi_state:
+                            # Case 1: An XML was already generated for this invoice.
+                            invoice_xml = base64.b64decode(invoice.l10n_hu_edi_attachment)
+                        else:
+                            # Case 2: No XML was generated for this invoice.
+                            if not invoice.l10n_hu_invoice_chain_index:
+                                invoice._l10n_hu_edi_set_chain_index_and_line_number()
+                            invoice_xml = invoice._l10n_hu_edi_generate_xml()
+
                         filename = f'{invoice.name.replace("/", "_")}.xml'
-                        zf.writestr(filename, invoice._l10n_hu_edi_generate_xml())
+                        zf.writestr(filename, invoice_xml)
             buf.seek(0)
             self.export_file = base64.b64encode(buf.read())
 

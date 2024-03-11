@@ -23,7 +23,7 @@
         <softwareDevCountryCode>___ignore___</softwareDevCountryCode>
         <softwareDevTaxNumber>___ignore___</softwareDevTaxNumber>
     </software>
-    <exchangeToken>token</exchangeToken>
+    <exchangeToken>01234567-abcd-abcd-abcd-0123456789abcdef01234567</exchangeToken>
     <invoiceOperations>
         <compressedContent>false</compressedContent>
         <invoiceOperation>

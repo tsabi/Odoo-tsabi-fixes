@@ -9,13 +9,13 @@ class ProductTemplate(models.Model):
 
     l10n_hu_product_code_type = fields.Selection(
         selection=[
-            ('VTSZ', 'VTSZ'),
-            ('TESZOR', 'TESZOR'),
-            ('KN', 'KN'),
-            ('AHK', 'AHK'),
-            ('KT', 'KT'),
-            ('CSK', 'CSK'),
-            ('EJ', 'EJ'),
+            ('VTSZ', 'VTSZ - Customs Code'),
+            ('TESZOR', 'TESZOR - CPA 2.1 Code'),
+            ('KN', 'KN - Combined Nomenclature Code'),
+            ('AHK', 'AHK - e-TKO Excise Duty Code'),
+            ('KT', 'KT - Environmental Product Code'),
+            ('CSK', 'CSK - Packaging Catalogue Code'),
+            ('EJ', 'EJ - Building Registry Number'),
             ('OTHER', 'OTHER'),
         ],
         string='(HU) Product Code Type',

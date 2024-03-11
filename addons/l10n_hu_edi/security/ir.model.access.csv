@@ -1,4 +1,3 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 l10n_hu_edi_credentials_admin,l10n_hu_edi.credentials group_account_manager,model_l10n_hu_edi_credentials,account.group_account_manager,1,1,1,1
-l10n_hu_edi_transaction_user,l10n_hu_edi.transaction group_account_invoice,model_l10n_hu_edi_transaction,account.group_account_invoice,1,1,1,1
 l10n_hu_edi_tax_audit_export_user,l10n_hu_edi.tax_audit_export group_account_invoice,model_l10n_hu_edi_tax_audit_export,account.group_account_invoice,1,1,1,1
