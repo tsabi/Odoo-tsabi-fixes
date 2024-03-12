@@ -34,7 +34,9 @@ class AccountMoveSend(models.TransientModel):
     @api.depends('move_ids')
     def _compute_l10n_hu_edi_enable_nav_30(self):
         for wizard in self:
-            enabled_moves = wizard.move_ids.filtered(lambda m: m._l10n_hu_edi_can_process())._origin
+            enabled_moves = wizard.move_ids.filtered(
+                lambda m: m._l10n_hu_edi_can_process(['start', 'upload', 'query_status', 'recover_timeout'])
+            )._origin
             if wizard.mode in ('invoice_single', 'invoice_multi') and enabled_moves:
                 wizard.l10n_hu_edi_enable_nav_30 = True
                 wizard.l10n_hu_edi_actionable_errors = enabled_moves._l10n_hu_edi_check_invoices()
@@ -56,7 +58,7 @@ class AccountMoveSend(models.TransientModel):
     def _need_invoice_document(self, invoice):
         # EXTENDS 'account'
         # If the send & print will create a new NAV 3.0 XML, we want to re-generate the PDF at the same time.
-        return super()._need_invoice_document(invoice) or invoice._l10n_hu_edi_can_process('start')
+        return super()._need_invoice_document(invoice) or invoice._l10n_hu_edi_can_process(['start'])
 
     @api.model
     def _hook_invoice_document_before_pdf_report_render(self, invoice, invoice_data):
@@ -64,7 +66,7 @@ class AccountMoveSend(models.TransientModel):
         super()._hook_invoice_document_before_pdf_report_render(invoice, invoice_data)
         if (
             invoice_data.get('l10n_hu_edi_checkbox_nav_30')
-            and invoice._l10n_hu_edi_can_process('start')
+            and invoice._l10n_hu_edi_can_process(['start'])
             and (errors := invoice._l10n_hu_edi_check_invoices())
         ):
             invoice_data['error'] = {
@@ -81,7 +83,7 @@ class AccountMoveSend(models.TransientModel):
             invoice.id
             for invoice, invoice_data in invoices_data.items()
             if invoice_data.get('l10n_hu_edi_checkbox_nav_30')
-               and invoice._l10n_hu_edi_can_process()
+               and invoice._l10n_hu_edi_can_process(['start', 'upload', 'query_status', 'recover_timeout'])
         ])
 
         invoices_data_hu = {
@@ -95,7 +97,7 @@ class AccountMoveSend(models.TransientModel):
         # (bad, because Odoo will try to retry the entire request, leading to duplicate sending to NAV)
         with invoices_hu._l10n_hu_edi_acquire_lock():
             # STEP 1: Generate the XML for the invoices.
-            invoices_hu.filtered(lambda m: m._l10n_hu_edi_can_process('start'))._l10n_hu_edi_start()
+            invoices_hu.filtered(lambda m: m._l10n_hu_edi_can_process(['start']))._l10n_hu_edi_start()
 
             # STEPS 2-4: Upload / Timeout recovery / Query status
             self._l10n_hu_edi_process_pending(invoices_data_hu)
@@ -128,7 +130,7 @@ class AccountMoveSend(models.TransientModel):
         if not action in possible_actions:
             raise UserError(_('Action must be one of %s', possible_actions))
 
-        invoices = self.env['account.move'].browse([invoice.id for invoice in invoices_data]).filtered(lambda m: m._l10n_hu_edi_can_process(action))
+        invoices = self.env['account.move'].browse([invoice.id for invoice in invoices_data]).filtered(lambda m: m._l10n_hu_edi_can_process([action]))
 
         if action == 'upload':
             invoices._l10n_hu_edi_upload()

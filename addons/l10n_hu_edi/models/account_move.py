@@ -24,21 +24,28 @@ class AccountMove(models.Model):
 
     # === EDI Fields === #
     l10n_hu_edi_state = fields.Selection(
-        ######################################################################################################
+        ######################################################################################################################
         # STATE DIAGRAM
         # * False --[start]--> to_send
         # * to_send --[upload]--> to_send, sent, send_timeout
         # * sent --[query_status]--> sent, confirmed, confirmed_warning, rejected
-        # * send_timeout --[recover_timeout]--> to_send, send_timeout, confirmed, confirmed_warning, rejected
-        # * confirmed, confirmed_warning, rejected: are final states
-        ######################################################################################################
+        # * confirmed, confirmed_warning --[request_cancel]--> cancel_sent, cancel_timeout
+        # * cancel_sent, cancel_pending --[query_status]--> confirmed_warning, cancel_pending, cancelled
+        # * send_timeout --[recover_timeout]--> to_send, send_timeout, confirmed, confirmed_warning, rejected,
+        # * cancel_timeout --[recover_timeout]--> confirmed_warning, cancel_sent, cancel_timeout, cancel_pending, cancelled
+        # * rejected, cancelled: are final states
+        ######################################################################################################################
         selection=[
             ('to_send', 'To Send'),
             ('sent', 'Sent, waiting for response'),
             ('send_timeout', 'Timeout when sending'),
             ('confirmed', 'Confirmed'),
             ('confirmed_warning', 'Confirmed with warnings'),
-            ('rejected', 'Rejected')
+            ('rejected', 'Rejected'),
+            ('cancel_sent', 'Cancellation request sent'),
+            ('cancel_timeout', 'Timeout when requesting cancellation'),
+            ('cancel_pending', 'Cancellation request pending'),
+            ('cancelled', 'Cancelled'),
         ],
         string='NAV 3.0 status',
         copy=False,
@@ -98,7 +105,7 @@ class AccountMove(models.Model):
     def _check_posted_if_active(self):
         """ Enforce the constraint that you cannot reset to draft / cancel a posted invoice if it was already sent to NAV. """
         for move in self:
-            if move.state in ['draft', 'cancel'] and move.l10n_hu_edi_state:
+            if move.state in ['draft', 'cancel'] and move.l10n_hu_edi_state not in [False, 'to_send', 'rejected', 'cancelled']:
                 raise ValidationError(_('Cannot reset to draft or cancel invoice %s because an electronic document was already sent to NAV!', move.name))
 
     # === Computes / Getters === #
@@ -114,39 +121,41 @@ class AccountMove(models.Model):
     @api.depends('l10n_hu_edi_state', 'state')
     def _compute_show_reset_to_draft_button(self):
         super()._compute_show_reset_to_draft_button()
-        self.filtered(lambda m: m.l10n_hu_edi_state not in [False, 'to_send', 'rejected']).show_reset_to_draft_button = False
+        self.filtered(lambda m: m.l10n_hu_edi_state not in [False, 'to_send', 'rejected', 'cancelled']).show_reset_to_draft_button = False
+
+    @api.depends('l10n_hu_edi_state')
+    def _compute_need_cancel_request(self):
+        # EXTEND 'account' to add dependencies
+        return super()._compute_need_cancel_request()
 
     @api.depends('name')
     def _compute_l10n_hu_edi_attachment_filename(self):
         for move in self:
             move.l10n_hu_edi_attachment_filename = f'{move.name.replace("/", "_")}.xml'
 
-    def _l10n_hu_edi_can_process(self, action=None, raise_if_cannot=False):
-        """ Returns whether an action may be performed on a given invoice, given its state.
-        If action is None, returns whether any action may be performed.
+    def _l10n_hu_edi_can_process(self, actions, raise_if_cannot=False):
+        """ Returns whether one or more actions may be performed on a given invoice, given its state.
         """
         if not self:
             return True
         valid_states = {
-            'start': False,
-            'upload': 'to_send',
-            'query_status': 'sent',
-            'recover_timeout': 'send_timeout',
+            'start': [False],
+            'upload': ['to_send'],
+            'query_status': ['sent', 'cancel_sent', 'cancel_pending'],
+            'recover_timeout': ['send_timeout', 'cancel_timeout'],
+            'request_cancel': ['confirmed', 'confirmed_warning'],
         }
         can_process = all(
             move.country_code == 'HU'
             and move.is_sale_document()
             and move.state == 'posted'
-            and (
-                action is None and move.l10n_hu_edi_state in valid_states.values()
-                or move.l10n_hu_edi_state == valid_states.get(action)
-            )
+            and any(move.l10n_hu_edi_state in valid_states.get(action, []) for action in actions)
             # Ensure that invoices created before l10n_hu_edi is installed can't be sent.
             and move.l10n_hu_invoice_chain_index is not False
             for move in self
         )
         if raise_if_cannot and not can_process:
-            raise UserError(_('Invalid start states %s for action %s!', self.mapped('l10n_hu_edi_state'), action))
+            raise UserError(_('Invalid start states %s!', self.mapped('l10n_hu_edi_state')))
         return can_process
 
     def _l10n_hu_get_chain_base(self):
@@ -210,6 +219,25 @@ class AccountMove(models.Model):
                 unconfirmed.mapped('name'))
             )
         return super().action_reverse()
+
+    def _need_cancel_request(self):
+        # EXTEND account
+        return super()._need_cancel_request() or self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']
+
+    def button_request_cancel(self):
+        # EXTEND 'account'
+        if self._need_cancel_request() and self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']:
+            return {
+                "name": _("Invoice Cancellation"),
+                "type": "ir.actions.act_window",
+                "view_type": "form",
+                "view_mode": "form",
+                "res_model": "l10n_hu_edi.cancellation",
+                "target": "new",
+                "context": {"default_invoice_id": self.id},
+            }
+
+        return super().button_request_cancel()
 
     def _post(self, soft=True):
         # EXTEND account
@@ -362,7 +390,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_start(self):
         """ Generate the invoice XMLs and queue them for sending. """
-        self._l10n_hu_edi_can_process('start', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['start'], raise_if_cannot=True)
         for invoice in self:
             if not invoice.company_id.l10n_hu_edi_primary_credentials_id:
                 raise UserError(_('Please set NAV credentials in the Accounting Settings!'))
@@ -384,7 +412,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_upload(self):
         """ Send the invoice XMLs to NAV. """
-        self._l10n_hu_edi_can_process('upload', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['upload'], raise_if_cannot=True)
         with self._l10n_hu_edi_acquire_lock():
             # Batch by credentials, with max 100 invoices per batch.
             for __, batch_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
@@ -392,7 +420,7 @@ class AccountMove(models.Model):
                     self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch()
 
     def _l10n_hu_edi_upload_single_batch(self):
-        self._l10n_hu_edi_can_process('upload', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['upload'], raise_if_cannot=True)
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
 
@@ -456,9 +484,9 @@ class AccountMove(models.Model):
         self |= self.search([
             ('l10n_hu_edi_credentials_id', 'in', self.l10n_hu_edi_credentials_id.ids),
             ('l10n_hu_edi_transaction_code', 'in', self.mapped('l10n_hu_edi_transaction_code')),
-            ('l10n_hu_edi_state', '=', 'sent'),
+            ('l10n_hu_edi_state', 'in', ['sent', 'cancel_sent']),
         ])
-        self._l10n_hu_edi_can_process('query_status', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
 
         with self._l10n_hu_edi_acquire_lock():
             # Querying status should be grouped by credentials and transaction code
@@ -467,9 +495,9 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_query_status_single_batch(self):
         """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
-        self._l10n_hu_edi_can_process('query_status', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
         try:
-            invoices_results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+            results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
                 self.l10n_hu_edi_credentials_id.sudo(),
                 self[0].l10n_hu_edi_transaction_code,
             )
@@ -482,75 +510,125 @@ class AccountMove(models.Model):
                 },
             })
 
-        for invoice_result in invoices_results:
-            invoice = self.filtered(lambda m: str(m.l10n_hu_edi_batch_upload_index) == invoice_result['index'])
+        for processing_result in results['processing_results']:
+            invoice = self.filtered(lambda m: str(m.l10n_hu_edi_batch_upload_index) == processing_result['index'])
             if not invoice:
-                _logger.error(_('Could not match NAV transaction_code %s, index %s to an invoice in Odoo', self[0].l10n_hu_edi_transaction_code, invoice_result['index']))
+                _logger.error(_('Could not match NAV transaction_code %s, index %s to an invoice in Odoo',
+                                self[0].l10n_hu_edi_transaction_code,
+                                processing_result['index']))
                 continue
 
-            invoice._l10n_hu_edi_process_query_transaction_result(invoice_result)
+            invoice._l10n_hu_edi_process_query_transaction_result(processing_result, results['annulment_status'])
 
-    def _l10n_hu_edi_process_query_transaction_result(self, invoice_result):
-        def get_errors_from_invoice_result(invoice_result):
+    def _l10n_hu_edi_process_query_transaction_result(self, processing_result, annulment_status):
+        def get_errors_from_processing_result(processing_result):
             return [
                 f'({message["validation_result_code"]}) {message["validation_error_code"]}: {message["message"]}'
-                for message in invoice_result.get('business_validation_messages', []) + invoice_result.get('technical_validation_messages', [])
+                for message in processing_result.get('business_validation_messages', []) + processing_result.get('technical_validation_messages', [])
             ]
 
         self.ensure_one()
-        if invoice_result['invoice_status'] in ['RECEIVED', 'PROCESSING', 'SAVED']:
-            # The invoice has not been processed yet, which corresponds to state='sent'.
-            if self.l10n_hu_edi_state != 'sent':
-                # This is triggered if we come from the send_timeout state
+
+        if processing_result['invoice_status'] in ['RECEIVED', 'PROCESSING', 'SAVED']:
+            # The invoice/annulment has not been processed yet.
+            if self.l10n_hu_edi_state == 'send_timeout':
                 self.write({
                     'l10n_hu_edi_state': 'sent',
                     'l10n_hu_edi_messages': {
-                        'error_title': _('The invoice was sent to the NAV, waiting for reply.'),
-                        'errors': [],
+                        'error_title': _('The invoice was sent to the NAV, waiting for confirmation.'),
+                        'errors': get_errors_from_processing_result(processing_result),
+                    },
+                })
+            elif self.l10n_hu_edi_state == 'cancel_timeout':
+                self.write({
+                    'l10n_hu_edi_state': 'cancel_sent',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The annulment request was sent to the NAV, waiting for confirmation.'),
+                        'errors': get_errors_from_processing_result(processing_result),
                     },
                 })
 
-        elif invoice_result['invoice_status'] == 'DONE':
-            if not invoice_result['business_validation_messages'] and not invoice_result['technical_validation_messages']:
+        # Invoice case
+        elif processing_result['invoice_status'] == 'DONE':
+            if self.l10n_hu_edi_state in ['sent', 'send_timeout']:
+                if not processing_result['business_validation_messages'] and not processing_result['technical_validation_messages']:
+                    self.write({
+                        'l10n_hu_edi_state': 'confirmed',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The invoice was successfully accepted by the NAV.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                        },
+                    })
+                else:
+                    self.write({
+                        'l10n_hu_edi_state': 'confirmed_warning',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The invoice was accepted by the NAV, but warnings were reported. To reverse, create a credit note.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                        },
+                    })
+            elif self.l10n_hu_edi_state in ['cancel_sent', 'cancel_timeout', 'cancel_pending']:
+                if annulment_status == 'NOT_VERIFIABLE':
+                    self.write({
+                        'l10n_hu_edi_state': 'confirmed_warning',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The annulment request was rejected by NAV.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                            'blocking_level': 'error',
+                        },
+                    })
+                elif annulment_status == 'VERIFICATION_PENDING':
+                    self.write({
+                        'l10n_hu_edi_state': 'cancel_pending',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The annulment request is pending, please confirm it on the OnlineSzámla portal.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                        }
+                    })
+                elif annulment_status == 'VERIFICATION_DONE':
+                    # Annulling a base invoice will also annul all its modification invoices on NAV.
+                    to_cancel = self if not self.reversal_move_id and not self.debit_note_ids else self._l10n_hu_get_chain_invoices()
+                    to_cancel.write({
+                        'l10n_hu_edi_state': 'cancelled',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The annulment request has been approved by the user on the OnlineSzámla portal.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                        }
+                    })
+                    to_cancel.button_cancel()
+                elif annulment_status == 'VERIFICATION_REJECTED':
+                    self.write({
+                        'l10n_hu_edi_state': 'confirmed_warning',
+                        'l10n_hu_edi_messages': {
+                            'error_title': _('The annulment request was rejected by the user on the OnlineSzámla portal.'),
+                            'errors': get_errors_from_processing_result(processing_result),
+                        }
+                    })
+
+        elif processing_result['invoice_status'] == 'ABORTED':
+            if self.l10n_hu_edi_state in ['sent', 'send_timeout']:
                 self.write({
-                    'l10n_hu_edi_state': 'confirmed',
+                    'l10n_hu_edi_state': 'rejected',
                     'l10n_hu_edi_messages': {
-                        'error_title': _('The invoice was successfully accepted by the NAV.'),
-                        'errors': [],
+                        'error_title': _('The invoice was rejected by the NAV.'),
+                        'errors': get_errors_from_processing_result(processing_result),
+                        'blocking_level': 'error',
                     },
                 })
-            else:
+            elif self.l10n_hu_edi_state in ['cancel_sent', 'cancel_timeout', 'cancel_pending']:
                 self.write({
                     'l10n_hu_edi_state': 'confirmed_warning',
                     'l10n_hu_edi_messages': {
-                        'error_title': _('The invoice was accepted by the NAV, but warnings were reported. To reverse, create a credit note.'),
-                        'errors': get_errors_from_invoice_result(invoice_result),
+                        'error_title': _('The cancellation request could not be performed.'),
+                        'errors': get_errors_from_processing_result(processing_result),
+                        'blocking_level': 'error',
                     },
                 })
-
-        elif invoice_result['invoice_status'] == 'ABORTED':
-            self.write({
-                'l10n_hu_edi_state': 'rejected',
-                'l10n_hu_edi_messages': {
-                    'error_title': _('The invoice was rejected by the NAV.'),
-                    'errors': get_errors_from_invoice_result(invoice_result),
-                    'blocking_level': 'error',
-                },
-            })
-
-        else:
-            self.write({
-                'l10n_hu_edi_messages': {
-                    'error_title': _('NAV returned a non-standard invoice status: %s', invoice_result['invoice_status']),
-                    'errors': [],
-                    'blocking_level': 'error',
-                },
-            })
 
     def _l10n_hu_edi_recover_timeout(self):
         """ Attempt to recover all invoices in `self` from an upload timeout """
         # Only attempt to recover from a timeout for invoices sent more than 6 minutes ago.
-        self._l10n_hu_edi_can_process('recover_timeout', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['recover_timeout'], raise_if_cannot=True)
         self = self.filtered(lambda m: m.l10n_hu_edi_send_time <= fields.Datetime.now() - timedelta(minutes=6))
         with self._l10n_hu_edi_acquire_lock():
             # Group by credentials.
@@ -567,7 +645,7 @@ class AccountMove(models.Model):
                     invoices._l10n_hu_edi_recover_timeout_single_batch()
 
     def _l10n_hu_edi_recover_timeout_single_batch(self):
-        self._l10n_hu_edi_can_process('recover_timeout', raise_if_cannot=True)
+        self._l10n_hu_edi_can_process(['recover_timeout'], raise_if_cannot=True)
         datetime_from = min(self.mapped('l10n_hu_edi_send_time'))
         datetime_to = max(self.mapped('l10n_hu_edi_send_time')) + timedelta(minutes=7)
 
@@ -595,7 +673,7 @@ class AccountMove(models.Model):
 
             for transaction_code in transaction_codes_to_query:
                 try:
-                    invoices_results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+                    results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
                         self.l10n_hu_edi_credentials_id.sudo(),
                         transaction_code,
                         return_original_request=True,
@@ -609,17 +687,26 @@ class AccountMove(models.Model):
                         },
                     })
 
-                for invoice_result in invoices_results:
+                for processing_result in results['processing_results']:
                     # Match invoice if the returned XML is the same as the one stored in Odoo.
+                    # Match annulment if the invoice name matches.
                     matched_invoice = self.filtered(
-                        lambda m: etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
-                                  == etree.canonicalize(invoice_result['original_invoice_file'])
+                        lambda m: (
+                            (
+                                m.l10n_hu_edi_state == 'send_timeout'
+                                and etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
+                                    == etree.canonicalize(processing_result['original_file'])
+                            ) or (
+                                m.l10n_hu_edi_state == 'cancel_timeout'
+                                and m.name == processing_result['original_xml'].findtext('{*}annulmentReference')
+                            )
+                        )
                     )
 
                     if matched_invoice:
                         # Set the correct transaction code on the matched invoice
                         matched_invoice.l10n_hu_edi_transaction_code = transaction_code
-                        matched_invoice._l10n_hu_edi_process_query_transaction_result(invoice_result)
+                        matched_invoice._l10n_hu_edi_process_query_transaction_result(processing_result, results['annulment_status'])
 
             available_pages = transaction_list['available_pages']
             page += 1
@@ -629,6 +716,82 @@ class AccountMove(models.Model):
             'l10n_hu_edi_state': 'to_send',
             'l10n_hu_edi_messages': {
                 'error_title': _('Sending failed due to time-out.'),
+                'errors': [],
+            }
+        })
+        self.filtered(lambda m: m.l10n_hu_edi_state == 'cancel_timeout').write({
+            'l10n_hu_edi_state': 'confirmed_warning',
+            'l10n_hu_edi_messages': {
+                'error_title': _('Annulment failed due to time-out.'),
+                'errors': [],
+            }
+        })
+
+    def _l10n_hu_edi_request_cancel(self, code, reason):
+        """ Send a cancellation request for all invoices in `self`. """
+        self._l10n_hu_edi_can_process(['request_cancel'], raise_if_cannot=True)
+        with self._l10n_hu_edi_acquire_lock():
+            # Batch by credentials, with max 100 annulment requests per batch.
+            for __, batch_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
+                for __, batch in groupby(enumerate(batch_credentials), lambda x: x[0] // 100):
+                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(code, reason)
+
+    def _l10n_hu_edi_request_cancel_single_batch(self, code, reason):
+        self._l10n_hu_edi_can_process(['request_cancel'], raise_if_cannot=True)
+        for i, invoice in enumerate(self, start=1):
+            invoice.l10n_hu_edi_batch_upload_index = i
+
+        annulment_operations = [
+            {
+                'index': invoice.l10n_hu_edi_batch_upload_index,
+                'annulmentReference': invoice.name,
+                'annulmentCode': code,
+                'annulmentReason': reason,
+            }
+            for invoice in self
+        ]
+
+        try:
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.l10n_hu_edi_credentials_id.sudo())
+        except L10nHuEdiConnectionError as e:
+            return self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
+        self.write({'l10n_hu_edi_send_time': fields.Datetime.now()})
+
+        try:
+            transaction_code = self.env['l10n_hu_edi.connection']._do_manage_annulment(
+                self.l10n_hu_edi_credentials_id.sudo(),
+                token_result['token'],
+                annulment_operations,
+            )
+        except L10nHuEdiConnectionError as e:
+            if e.code == 'timeout':
+                return self.write({
+                    'l10n_hu_edi_state': 'cancel_timeout',
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('Cancellation request timed out.'),
+                        'errors': e.errors,
+                    },
+                })
+            return self.write({
+                'l10n_hu_edi_messages': {
+                    'error_title': _('Cancellation request failed.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
+        self.write({
+            'l10n_hu_edi_state': 'cancel_sent',
+            'l10n_hu_edi_transaction_code': transaction_code,
+            'l10n_hu_edi_messages': {
+                'error_title': _('Cancellation request submitted, waiting for response.'),
                 'errors': [],
             }
         })

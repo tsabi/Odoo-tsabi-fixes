@@ -66,10 +66,32 @@
         </QueryTransactionListRequest>
     </template>
 
-    <template id="token_exchange_request">
-        <TokenExchangeRequest xmlns:common="http://schemas.nav.gov.hu/NTCA/1.0/common" xmlns="http://schemas.nav.gov.hu/OSA/3.0/api">
+    <template id="manage_annulment_request">
+        <ManageAnnulmentRequest xmlns:common="http://schemas.nav.gov.hu/NTCA/1.0/common" xmlns="http://schemas.nav.gov.hu/OSA/3.0/api">
             <t t-call="l10n_hu_edi.request_header"/>
-        </TokenExchangeRequest>
+            <exchangeToken t-out="exchangeToken"/>
+            <annulmentOperations>
+                <annulmentOperation t-foreach="annulments" t-as="annulment_data">
+                    <index t-out="annulment_data['index']"/>
+                    <annulmentOperation t-out="annulment_data['annulmentOperation']"/>
+                    <invoiceAnnulment t-out="annulment_data['invoiceAnnulment']"/>
+                </annulmentOperation>
+            </annulmentOperations>
+        </ManageAnnulmentRequest>
+    </template>
+
+    <template id="invoice_annulment">
+        <InvoiceAnnulment
+                xmlns="http://schemas.nav.gov.hu/OSA/3.0/annul"
+                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                xsi:schemaLocation="http://schemas.nav.gov.hu/OSA/3.0/data invoiceAnnulment.xsd"
+                xmlns:common="http://schemas.nav.gov.hu/NTCA/1.0/common"
+                xmlns:base="http://schemas.nav.gov.hu/OSA/3.0/base">
+            <annulmentReference t-out="annulmentReference"/>
+            <annulmentTimestamp t-out="annulmentTimestamp"/>
+            <annulmentCode t-out="annulmentCode"/>
+            <annulmentReason t-out="annulmentReason"/>
+        </InvoiceAnnulment>
     </template>
 
 </odoo>

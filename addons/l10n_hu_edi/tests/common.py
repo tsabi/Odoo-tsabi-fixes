@@ -240,3 +240,15 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
         reverse_moves_dict = wizard_reverse.reverse_moves()
         reverse_move = self.env['account.move'].browse(reverse_moves_dict.get('res_id', False))
         return reverse_move
+
+    def create_cancel_wizard(self):
+        """ Create an invoice, send it, and create a cancellation wizard for it. """
+        invoice = self.create_invoice_simple()
+        invoice.action_post()
+        send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
+        send_and_print.action_send_and_print()
+        cancel_wizard = self.env['l10n_hu_edi.cancellation'].with_context({"default_invoice_id": invoice.id}).create({
+            'code': 'ERRATIC_DATA',
+            'reason': 'Some reason...',
+        })
+        return invoice, cancel_wizard

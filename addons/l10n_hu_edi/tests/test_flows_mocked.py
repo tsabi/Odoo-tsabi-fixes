@@ -100,6 +100,39 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
+    def test_cancel_invoice_error(self):
+        with freeze_time('2024-01-25T15:28:53Z'):
+            with self.patch_post():
+                invoice, cancel_wizard = self.create_cancel_wizard()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_error.xml', 'r') as response_file:
+                response_data = response_file.read()
+            with self.patch_post({'queryTransactionStatus': response_data}):
+                cancel_wizard.button_request_cancel()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed_warning'}])
+
+    def test_cancel_invoice_pending(self):
+        with freeze_time('2024-01-25T15:28:53Z'):
+            with self.patch_post():
+                invoice, cancel_wizard = self.create_cancel_wizard()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_annulment_pending.xml', 'r') as response_file:
+                response_data = response_file.read()
+            with self.patch_post({'queryTransactionStatus': response_data}):
+                cancel_wizard.button_request_cancel()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancel_pending'}])
+
+    def test_cancel_invoice_done(self):
+        with freeze_time('2024-01-25T15:28:53Z'):
+            with self.patch_post():
+                invoice, cancel_wizard = self.create_cancel_wizard()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_annulment_done.xml', 'r') as response_file:
+                response_data = response_file.read()
+            with self.patch_post({'queryTransactionStatus': response_data}):
+                cancel_wizard.button_request_cancel()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancelled', 'state': 'cancel'}])
+
     # === Helpers === #
 
     @contextlib.contextmanager
@@ -113,7 +146,7 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
         def mock_post(url, data, headers, timeout=None):
             prod_url = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v3'
             demo_url = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/v3'
-            mocked_requests = ['manageInvoice', 'queryTaxpayer', 'tokenExchange', 'queryTransactionStatus', 'queryTransactionList']
+            mocked_requests = ['manageInvoice', 'queryTaxpayer', 'tokenExchange', 'queryTransactionStatus', 'queryTransactionList', 'manageAnnulment']
 
             base_url, __, service = url.rpartition('/')
             if base_url not in (prod_url, demo_url) or service not in mocked_requests:

@@ -50,6 +50,13 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
 
+            cancel_wizard = self.env['l10n_hu_edi.cancellation'].with_context({"default_invoice_id": credit_note.id}).create({
+                'code': 'ERRATIC_DATA',
+                'reason': 'Some reason...',
+            })
+            cancel_wizard.button_request_cancel()
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending'}])
+
     def test_send_invoice_complex_huf(self):
         invoice = self.create_invoice_complex_huf()
         with self.set_invoice_name(invoice, 'INV/2024/'):
@@ -108,7 +115,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.name = f'{prefix}{last_invoice[prefix]:05}'
             yield
         finally:
-            if invoice.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning']:
+            if invoice.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning', 'cancel_sent', 'cancel_pending', 'cancelled']:
                 last_invoice[prefix] -= 1
             else:
                 with tools.file_open('l10n_hu_edi/tests/credentials.py', 'a') as credentials_file:

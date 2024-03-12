@@ -31,6 +31,7 @@
         'views/res_company_views.xml',
         'views/res_config_settings_views.xml',
         'wizard/account_move_send_views.xml',
+        'wizard/l10n_hu_edi_cancellation.xml',
         'wizard/l10n_hu_edi_tax_audit_export.xml',
     ],
     'demo': [

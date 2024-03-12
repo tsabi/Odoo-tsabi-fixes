@@ -111,12 +111,11 @@ class L10nHuEdiConnection(models.AbstractModel):
         invoice_hashes = []
         for invoice_operation in invoice_operations:
             invoice_data_b64 = b64encode(invoice_operation['invoice_data']).decode('utf-8')
-            invoice_values = {
+            template_values['invoices'].append({
                 'index': invoice_operation['index'],
                 'invoiceOperation': invoice_operation['operation'],
                 'invoiceData': invoice_data_b64,
-            }
-            template_values['invoices'].append(invoice_values)
+            })
             invoice_hashes.append(self._calculate_invoice_hash(invoice_operation['operation'] + invoice_data_b64))
 
         template_values.update(self._get_header_values(credentials, invoice_hashs=invoice_hashes))
@@ -153,39 +152,46 @@ class L10nHuEdiConnection(models.AbstractModel):
         status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionStatus', request_data)
         self._parse_error_response(status_code, response_xml)
 
-        invoices_results = []
-        for invoice_xml in response_xml.findall('{*}processingResults/{*}processingResult'):
-            invoice_result = {
-                'index': invoice_xml.findtext('{*}index'),
-                'invoice_status': invoice_xml.findtext('{*}invoiceStatus'),
+        results = {
+            'processing_results': [],
+            'annulment_status': response_xml.findtext('{*}processingResults/{*}annulmentData/{*}annulmentVerificationStatus'),
+        }
+        for processing_result_xml in response_xml.findall('{*}processingResults/{*}processingResult'):
+            processing_result = {
+                'index': processing_result_xml.findtext('{*}index'),
+                'invoice_status': processing_result_xml.findtext('{*}invoiceStatus'),
                 'business_validation_messages': [],
                 'technical_validation_messages': [],
             }
-            for message_xml in invoice_xml.findall('{*}businessValidationMessages'):
-                invoice_result['business_validation_messages'].append({
+            for message_xml in processing_result_xml.findall('{*}businessValidationMessages'):
+                processing_result['business_validation_messages'].append({
                     'validation_result_code': message_xml.findtext('{*}validationResultCode'),
                     'validation_error_code': message_xml.findtext('{*}validationErrorCode'),
                     'message': message_xml.findtext('{*}message'),
                 })
-            for message_xml in invoice_xml.findall('{*}technicalValidationMessages'):
-                invoice_result['technical_validation_messages'].append({
+            for message_xml in processing_result_xml.findall('{*}technicalValidationMessages'):
+                processing_result['technical_validation_messages'].append({
                     'validation_result_code': message_xml.findtext('{*}validationResultCode'),
                     'validation_error_code': message_xml.findtext('{*}validationErrorCode'),
                     'message': message_xml.findtext('{*}message'),
                 })
             if return_original_request:
                 try:
-                    original_invoice_file = b64decode(invoice_xml.findtext('{*}originalRequest')).decode()
+                    original_file = b64decode(processing_result_xml.findtext('{*}originalRequest'))
+                    original_xml = etree.fromstring(original_file)
                 except binascii.Error as e:
                     raise L10nHuEdiConnectionError(str(e))
+                except etree.ParserError as e:
+                    raise L10nHuEdiConnectionError(str(e))
 
-                invoice_result.update({
-                    'original_invoice_file': original_invoice_file,
+                processing_result.update({
+                    'original_file': original_file.decode(),
+                    'original_xml': original_xml,
                 })
 
-            invoices_results.append(invoice_result)
+            results['processing_results'].append(processing_result)
 
-        return invoices_results
+        return results
 
     @api.model
     def _do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
@@ -218,6 +224,7 @@ class L10nHuEdiConnection(models.AbstractModel):
         transactions = [
             {
                 'transaction_code': transaction_xml.findtext('{*}transactionId'),
+                'annulment': transaction_xml.findtext('{*}technicalAnnulment') == 'true',
                 'username': transaction_xml.findtext('{*}insCusUser'),
                 'source': transaction_xml.findtext('{*}source'),
             }
@@ -225,6 +232,52 @@ class L10nHuEdiConnection(models.AbstractModel):
         ]
 
         return {"transactions": transactions, "available_pages": available_pages}
+
+    @api.model
+    def _do_manage_annulment(self, credentials, token, annulment_operations):
+        """ Request technical annulment of one or more invoices.
+        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param token: a token obtained via `_do_token_exchange`
+        :param annulment_operations: a list of dictionaries:
+            {
+                'index': <index given to invoice>,
+                'annulmentReference': the name of the invoice to annul,
+                'annulmentCode': one of ('ERRATIC_DATA', 'ERRATIC_INVOICE_NUMBER', 'ERRATIC_INVOICE_ISSUE_DATE', 'ERRATIC_ELECTRONIC_HASH_VALUE'),
+                'annulmentReason': a plain-text explanation of the reason for annulment,
+            }
+        :return str: The transaction code issued by NAV.
+        :raise: L10nHuEdiConnectionError, with code='timeout' if a timeout occurred.
+        """
+        template_values = {
+            'exchangeToken': token,
+            'annulments': []
+        }
+
+        annulment_hashes = []
+        for annulment_operation in annulment_operations:
+            annulment_operation['annulmentTimestamp'] = format_timestamp(datetime.datetime.utcnow())
+            annulment_data = self.env['ir.qweb']._render('l10n_hu_edi.invoice_annulment', annulment_operation)
+            annulment_data_b64 = b64encode(annulment_data.encode()).decode('utf-8')
+            template_values['annulments'].append({
+                'index': annulment_operation['index'],
+                'annulmentOperation': 'ANNUL',
+                'invoiceAnnulment': annulment_data_b64,
+            })
+            annulment_hashes.append(self._calculate_invoice_hash('ANNUL' + annulment_data_b64))
+
+        template_values.update(self._get_header_values(credentials, invoice_hashs=annulment_hashes))
+
+        request_data = self.env['ir.qweb']._render('l10n_hu_edi.manage_annulment_request', template_values)
+        request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
+
+        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'manageAnnulment', request_data, timeout=60)
+        self._parse_error_response(status_code, response_xml)
+
+        transaction_code = response_xml.findtext('{*}transactionId')
+        if not transaction_code:
+            raise L10nHuEdiConnectionError(_('Invoice Upload failed: NAV did not return a Transaction ID.'))
+
+        return transaction_code
 
     # === Helpers: XML generation === #
 
@@ -283,10 +336,11 @@ class L10nHuEdiConnection(models.AbstractModel):
         else:
             raise L10nHuEdiConnectionError(_('Mode should be Production or Test!'))
 
-        if service in ['tokenExchange', 'queryTaxpayer', 'manageInvoice', 'queryTransactionStatus', 'queryTransactionList']:
+        services = ['tokenExchange', 'queryTaxpayer', 'manageInvoice', 'queryTransactionStatus', 'queryTransactionList', 'manageAnnulment']
+        if service in services:
             url += service
         else:
-            raise L10nHuEdiConnectionError(_('Service should be one of tokenExchange, queryTaxpayer, manageInvoice, queryTransactionStatus, queryTransactionList!'))
+            raise L10nHuEdiConnectionError(_('Service should be one of %s!', ', '.join(services)))
 
         headers = {'content-type': 'application/xml', 'accept': 'application/xml'}
         if self.env.context.get('nav_comm_debug'):
