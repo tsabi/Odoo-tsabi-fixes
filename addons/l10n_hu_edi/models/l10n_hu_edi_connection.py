@@ -47,7 +47,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     @api.model
     def _do_token_exchange(self, credentials):
         """ Request a token for invoice submission.
-        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :return: a dictionary {'token': str, 'token_validity_to': datetime.datetime}
         :raise: L10nHuEdiConnectionError
         """
@@ -67,8 +67,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.token_exchange_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
 
-        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'tokenExchange', request_data)
-        self._parse_error_response(status_code, response_xml)
+        response_xml = self._call_nav_endpoint(credentials['mode'], 'tokenExchange', request_data)
+        self._parse_error_response(response_xml)
 
         encrypted_token = response_xml.findtext('{*}encodedExchangeToken')
         token_validity_to = response_xml.findtext('{*}tokenValidityTo')
@@ -92,7 +92,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     @api.model
     def _do_manage_invoice(self, credentials, token, invoice_operations):
         """ Submit one or more invoices.
-        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param token: a token obtained via `_do_token_exchange`
         :param invoice_operations: a list of dictionaries:
             {
@@ -123,8 +123,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.manage_invoice_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
 
-        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'manageInvoice', request_data, timeout=60)
-        self._parse_error_response(status_code, response_xml)
+        response_xml = self._call_nav_endpoint(credentials['mode'], 'manageInvoice', request_data, timeout=60)
+        self._parse_error_response(response_xml)
 
         transaction_code = response_xml.findtext('{*}transactionId')
         if not transaction_code:
@@ -135,7 +135,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     @api.model
     def _do_query_transaction_status(self, credentials, transaction_code, return_original_request=False):
         """ Query the status of a transaction.
-        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param transaction_code: the code of the transaction to query
         :param return_original_request: whether to request the submitted invoice XML.
         :return: a list of dicts {'index': str, 'invoice_status': str, 'business_validation_messages', 'technical_validation_messages'}
@@ -149,8 +149,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.query_transaction_status_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
 
-        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionStatus', request_data)
-        self._parse_error_response(status_code, response_xml)
+        response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionStatus', request_data)
+        self._parse_error_response(response_xml)
 
         results = {
             'processing_results': [],
@@ -196,7 +196,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     @api.model
     def _do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
         """ Query the transactions that were submitted in a given time interval.
-        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param datetime_from: start of the time interval to query
         :param datetime_to: end of the time interval to query
         :return: a dict {'transaction_codes': list[str], 'available_pages': int}
@@ -212,8 +212,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.query_transaction_list_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
 
-        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionList', request_data)
-        self._parse_error_response(status_code, response_xml)
+        response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionList', request_data)
+        self._parse_error_response(response_xml)
 
         available_pages = response_xml.findtext('{*}transactionListResult/{*}availablePage')
         try:
@@ -236,7 +236,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     @api.model
     def _do_manage_annulment(self, credentials, token, annulment_operations):
         """ Request technical annulment of one or more invoices.
-        :param credentials: a dictionary {'vat': str, 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
         :param token: a token obtained via `_do_token_exchange`
         :param annulment_operations: a list of dictionaries:
             {
@@ -270,8 +270,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.manage_annulment_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
 
-        status_code, response_xml = self._call_nav_endpoint(credentials['mode'], 'manageAnnulment', request_data, timeout=60)
-        self._parse_error_response(status_code, response_xml)
+        response_xml = self._call_nav_endpoint(credentials['mode'], 'manageAnnulment', request_data, timeout=60)
+        self._parse_error_response(response_xml)
 
         transaction_code = response_xml.findtext('{*}transactionId')
         if not transaction_code:
@@ -364,27 +364,28 @@ class L10nHuEdiConnection(models.AbstractModel):
                 response_object.text,
             )
 
-        if response_object.status_code != 200:
-            raise L10nHuEdiConnectionError(_('NAV returned status code %s: %s', response_object.status_code, response_object.text))
+        try:
+            response_xml = etree.fromstring(response_object.text.encode())
+        except etree.ParseError:
+            raise L10nHuEdiConnectionError(_('Invalid NAV response!'))
 
-        return response_object.status_code, etree.fromstring(response_object.text.encode())
+        return response_xml
 
     # === Helpers: Response parsing === #
 
-    def _parse_error_response(self, status_code, response_xml):
+    def _parse_error_response(self, response_xml):
         if response_xml.tag == '{http://schemas.nav.gov.hu/OSA/3.0/api}GeneralErrorResponse':
             errors = []
             for message_xml in response_xml.findall('{*}technicalValidationMessages'):
                 message = message_xml.findtext('{*}message')
-                result_code = message_xml.findtext('{*}validationResultCode')
                 error_code = message_xml.findtext('{*}validationErrorCode')
-                errors.append(f'{message} ({result_code},{error_code})')
+                errors.append(f'{error_code}: {message}')
             raise L10nHuEdiConnectionError(errors)
 
         if response_xml.tag == '{http://schemas.nav.gov.hu/OSA/3.0/api}GeneralExceptionResponse':
             message = response_xml.findtext('{*}message')
             code = response_xml.findtext('{*}errorCode')
-            raise L10nHuEdiConnectionError(f'{message} ({code})')
+            raise L10nHuEdiConnectionError(f'{code}: {message}')
 
         func_code = response_xml.findtext('{*}result/{*}funcCode')
         if func_code != 'OK':

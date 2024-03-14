@@ -1,7 +1,15 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import models, fields
+from odoo import models, fields, _
+from odoo.exceptions import UserError
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnectionError
+
+
+L10N_HU_EDI_SERVER_MODE_SELECTION = [
+    ('production', 'Production'),
+    ('test', 'Test'),
+]
 
 
 class ResCompany(models.Model):
@@ -19,14 +27,21 @@ class ResCompany(models.Model):
         ],
         string='Hungarian Tax Regime',
     )
-    l10n_hu_edi_credentials_ids = fields.One2many(
-        comodel_name='l10n_hu_edi.credentials',
-        inverse_name='company_id',
-        string='NAV Credentials',
+    l10n_hu_edi_server_mode = fields.Selection(
+        selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
+        string='Server Mode',
     )
-    l10n_hu_edi_primary_credentials_id = fields.Many2one(
-        comodel_name='l10n_hu_edi.credentials',
-        string='Primary NAV Credentials',
+    l10n_hu_edi_username = fields.Char(
+        string='Username',
+    )
+    l10n_hu_edi_password = fields.Char(
+        string='Password',
+    )
+    l10n_hu_edi_signature_key = fields.Char(
+        string='Signature Key',
+    )
+    l10n_hu_edi_replacement_key = fields.Char(
+        string='Replacement Key',
     )
 
     def _l10n_hu_edi_configure_company(self):
@@ -51,8 +66,26 @@ class ResCompany(models.Model):
             })
             res_config_id.execute()
 
-    def write(self, vals):
-        # If we change the company VAT, we should deactivate any credentials with a different VAT number
-        if 'vat' in vals:
-            self.l10n_hu_edi_credentials_ids.sudo().filtered(lambda c: c.vat != vals['vat']).is_active = False
-        return super().write(vals)
+    def _l10n_hu_edi_get_credentials_dict(self):
+        self.ensure_one()
+        return {
+            'vat': self.vat or '',
+            'mode': self.l10n_hu_edi_server_mode or '',
+            'username': self.l10n_hu_edi_username or '',
+            'password': self.l10n_hu_edi_password or '',
+            'signature_key': self.l10n_hu_edi_signature_key or '',
+            'replacement_key': self.l10n_hu_edi_replacement_key or '',
+        }
+
+    def _l10n_hu_edi_test_credentials(self):
+        for company in self:
+            if not company.vat:
+                raise UserError(_('NAV Credentials: Please set the hungarian vat number on the company first!'))
+            try:
+                self.env['l10n_hu_edi.connection']._do_token_exchange(company._l10n_hu_edi_get_credentials_dict())
+            except L10nHuEdiConnectionError as e:
+                raise UserError(
+                    _('Incorrect NAV Credentials!') + '\n'
+                    + _('Check that your company VAT number is set correctly.') + '\n\n'
+                    + str(e)
+                )

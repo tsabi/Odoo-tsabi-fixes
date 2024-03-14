@@ -22,7 +22,6 @@
         'data/ir_cron.xml',
         'views/report_templates.xml',
         'views/report_invoice.xml',
-        'views/l10n_hu_edi_credentials_views.xml',
         'views/account_move_views.xml',
         'views/product_template_views.xml',
         'views/account_tax_views.xml',

@@ -10,7 +10,7 @@
     <template id="report_invoice_document" inherit_id="account.report_invoice_document" primary="True">
         <xpath expr="//t[@t-set='forced_vat']" position="replace"/>
         <xpath expr="//t[@t-set='o']" position="after">
-            <h1 t-if="o.l10n_hu_edi_credentials_mode not in [False, 'production']" style="opacity: 0.5;color: BLACK;position: absolute; width:100%;text-align: center;-webkit-transform: rotate(-45deg);font-size: 10em;">
+            <h1 t-if="o.l10n_hu_edi_server_mode not in [False, 'production']" style="opacity: 0.5;color: BLACK;position: absolute; width:100%;text-align: center;-webkit-transform: rotate(-45deg);font-size: 10em;">
                 TEST MODE
             </h1>
             <t t-set="sign" t-value="-1 if 'refund' in o.move_type else 1"/>

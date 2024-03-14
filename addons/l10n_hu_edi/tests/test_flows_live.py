@@ -24,14 +24,9 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
     # === Overrides === #
 
     @classmethod
-    def create_edi_credentials(cls):
+    def write_edi_credentials(cls):
         # OVERRIDE
-        return cls.env['l10n_hu_edi.credentials'].with_context(nav_comm_debug=True).sudo().create([
-            {
-                'company_id': cls.company_data['company'].id,
-                **TEST_CRED,
-            }
-        ])
+        return cls.company_data['company'].with_context(nav_comm_debug=True).write({**TEST_CRED})
 
     # === Tests === #
 
@@ -106,11 +101,6 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
-    def test_cancel_invoice_pending(self):
-        invoice, cancel_wizard = self.create_cancel_wizard()
-        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
-        cancel_wizard.button_request_cancel()
-        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancel_pending'}])
 
     # === Helpers === #
 

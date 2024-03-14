@@ -6,6 +6,7 @@ from odoo.exceptions import UserError, ValidationError
 from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, groupby
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
 from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnectionError
+from odoo.addons.l10n_hu_edi.models.res_company import L10N_HU_EDI_SERVER_MODE_SELECTION
 
 import base64
 import math
@@ -51,12 +52,6 @@ class AccountMove(models.Model):
         copy=False,
         index='btree_not_null',
     )
-    l10n_hu_edi_credentials_id = fields.Many2one(
-        comodel_name='l10n_hu_edi.credentials',
-        string='Credentials',
-        copy=False,
-        index='btree_not_null',
-    )
     l10n_hu_edi_batch_upload_index = fields.Integer(
         string='Index of invoice within a batch upload',
         copy=False,
@@ -84,11 +79,9 @@ class AccountMove(models.Model):
         help='Index in the chain of modification invoices.',
         copy=False,
     )
-    l10n_hu_edi_credentials_mode = fields.Selection(
-        related='l10n_hu_edi_credentials_id.mode',
-    )
-    l10n_hu_edi_credentials_username = fields.Char(
-        related='l10n_hu_edi_credentials_id.username',
+    l10n_hu_edi_server_mode = fields.Selection(
+        selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
+        string='Server Mode',
     )
     l10n_hu_edi_attachment_filename = fields.Char(
         string='Invoice XML filename',
@@ -150,6 +143,11 @@ class AccountMove(models.Model):
             and move.is_sale_document()
             and move.state == 'posted'
             and any(move.l10n_hu_edi_state in valid_states.get(action, []) for action in actions)
+            # Only process production moves when the company credentials are production
+            and (
+                'start' in actions and move.company_id.l10n_hu_edi_server_mode
+                or move.l10n_hu_edi_server_mode == move.company_id.l10n_hu_edi_server_mode
+            )
             # Ensure that invoices where the chain index is not set can't be sent.
             and move.l10n_hu_invoice_chain_index is not False
             # Ensure that an invoice cannot be sent before all previous modification invoices have been confirmed.
@@ -211,7 +209,7 @@ class AccountMove(models.Model):
         # EXTEND account
         self.filtered(lambda m: m.l10n_hu_edi_state in ['to_send', 'rejected']).write({
             'l10n_hu_edi_state': False,
-            'l10n_hu_edi_credentials_id': False,
+            'l10n_hu_edi_server_mode': False,
             'l10n_hu_edi_batch_upload_index': False,
             'l10n_hu_edi_attachment': False,
             'l10n_hu_edi_send_time': False,
@@ -383,7 +381,7 @@ class AccountMove(models.Model):
             if values['records']
         }
 
-        if companies_missing_credentials := self.company_id.filtered(lambda c: not c.l10n_hu_edi_primary_credentials_id):
+        if companies_missing_credentials := self.company_id.filtered(lambda c: not c.l10n_hu_edi_server_mode):
             errors['company_credentials_missing'] = {
                 'message': _('Please set NAV credentials in the Accounting Settings!'),
                 'action_text': _('Open Accounting Settings'),
@@ -396,11 +394,9 @@ class AccountMove(models.Model):
         """ Generate the invoice XMLs and queue them for sending. """
         self._l10n_hu_edi_can_process(['start'], raise_if_cannot=True)
         for invoice in self:
-            if not invoice.company_id.l10n_hu_edi_primary_credentials_id:
-                raise UserError(_('Please set NAV credentials in the Accounting Settings!'))
             invoice.write({
                 'l10n_hu_edi_state': 'to_send',
-                'l10n_hu_edi_credentials_id': invoice.company_id.l10n_hu_edi_primary_credentials_id.id,
+                'l10n_hu_edi_server_mode': invoice.company_id.l10n_hu_edi_server_mode,
                 'l10n_hu_edi_attachment': base64.b64encode(invoice._l10n_hu_edi_generate_xml()),
             })
             # Set name & mimetype on newly-created attachment.
@@ -418,9 +414,9 @@ class AccountMove(models.Model):
         """ Send the invoice XMLs to NAV. """
         self._l10n_hu_edi_can_process(['upload'], raise_if_cannot=True)
         with self._l10n_hu_edi_acquire_lock():
-            # Batch by credentials, with max 100 invoices per batch.
-            for __, batch_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
-                for __, batch in groupby(enumerate(batch_credentials), lambda x: x[0] // 100):
+            # Batch by company, with max 100 invoices per batch.
+            for __, batch_company in groupby(self, lambda m: m.company_id):
+                for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
                     self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch()
 
     def _l10n_hu_edi_upload_single_batch(self):
@@ -446,7 +442,7 @@ class AccountMove(models.Model):
         ]
 
         try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.l10n_hu_edi_credentials_id.sudo())
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_messages': {
@@ -460,7 +456,7 @@ class AccountMove(models.Model):
 
         try:
             transaction_code = self.env['l10n_hu_edi.connection']._do_manage_invoice(
-                self.l10n_hu_edi_credentials_id.sudo(),
+                self.company_id._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 invoice_operations,
             )
@@ -492,17 +488,17 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_query_status(self):
         """ Check the NAV invoice status. """
-        # We should update all invoices with the same credentials and transaction code at once.
+        # We should update all invoices with the same company and transaction code at once.
         self |= self.search([
-            ('l10n_hu_edi_credentials_id', 'in', self.l10n_hu_edi_credentials_id.ids),
+            ('company_id', 'in', self.company_id.ids),
             ('l10n_hu_edi_transaction_code', 'in', self.mapped('l10n_hu_edi_transaction_code')),
             ('l10n_hu_edi_state', 'in', ['sent', 'cancel_sent']),
         ])
         self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
 
         with self._l10n_hu_edi_acquire_lock():
-            # Querying status should be grouped by credentials and transaction code
-            for __, invoices in groupby(self, lambda m: (m.l10n_hu_edi_credentials_id, m.l10n_hu_edi_transaction_code)):
+            # Querying status should be grouped by company and transaction code
+            for __, invoices in groupby(self, lambda m: (m.company_id, m.l10n_hu_edi_transaction_code)):
                 self.env['account.move'].browse([m.id for m in invoices])._l10n_hu_edi_query_status_single_batch()
 
     def _l10n_hu_edi_query_status_single_batch(self):
@@ -510,7 +506,7 @@ class AccountMove(models.Model):
         self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
         try:
             results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
-                self.l10n_hu_edi_credentials_id.sudo(),
+                self.company_id._l10n_hu_edi_get_credentials_dict(),
                 self[0].l10n_hu_edi_transaction_code,
             )
         except L10nHuEdiConnectionError as e:
@@ -643,11 +639,11 @@ class AccountMove(models.Model):
         self._l10n_hu_edi_can_process(['recover_timeout'], raise_if_cannot=True)
         self = self.filtered(lambda m: m.l10n_hu_edi_send_time <= fields.Datetime.now() - timedelta(minutes=6))
         with self._l10n_hu_edi_acquire_lock():
-            # Group by credentials.
-            for __, invoices_by_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
+            # Group by company.
+            for __, invoices_by_company in groupby(self, lambda m: m.company_id):
                 # Further group by 7-minute time intervals (more precisely, time intervals which don't have more than 7 minutes between missing invoices)
                 time_interval_groups = []
-                for invoice in sorted(invoices_by_credentials, key=lambda m: m.l10n_hu_edi_send_time):
+                for invoice in sorted(invoices_by_company, key=lambda m: m.l10n_hu_edi_send_time):
                     if not time_interval_groups or invoice.l10n_hu_edi_send_time >= time_interval_groups[-1][-1].l10n_hu_edi_send_time + timedelta(minutes=5):
                         time_interval_groups.append(invoice)
                     else:
@@ -666,7 +662,12 @@ class AccountMove(models.Model):
 
         while page <= available_pages:
             try:
-                transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(self.l10n_hu_edi_credentials_id.sudo(), datetime_from, datetime_to, page)
+                transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(
+                    self.company_id._l10n_hu_edi_get_credentials_dict(),
+                    datetime_from,
+                    datetime_to,
+                    page
+                )
             except L10nHuEdiConnectionError as e:
                 return self.write({
                     'l10n_hu_edi_messages': {
@@ -679,14 +680,14 @@ class AccountMove(models.Model):
             transaction_codes_to_query = [
                 t['transaction_code']
                 for t in transaction_list['transactions']
-                if t['username'] == self.l10n_hu_edi_credentials_username
+                if t['username'] == self.company_id.l10n_hu_edi_username
                    and t['source'] == 'MGM'
             ]
 
             for transaction_code in transaction_codes_to_query:
                 try:
                     results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
-                        self.l10n_hu_edi_credentials_id.sudo(),
+                        self.company_id._l10n_hu_edi_get_credentials_dict(),
                         transaction_code,
                         return_original_request=True,
                     )
@@ -743,9 +744,9 @@ class AccountMove(models.Model):
         """ Send a cancellation request for all invoices in `self`. """
         self._l10n_hu_edi_can_process(['request_cancel'], raise_if_cannot=True)
         with self._l10n_hu_edi_acquire_lock():
-            # Batch by credentials, with max 100 annulment requests per batch.
-            for __, batch_credentials in groupby(self, lambda m: m.l10n_hu_edi_credentials_id):
-                for __, batch in groupby(enumerate(batch_credentials), lambda x: x[0] // 100):
+            # Batch by company, with max 100 annulment requests per batch.
+            for __, batch_company in groupby(self, lambda m: m.company_id):
+                for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
                     self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(code, reason)
 
     def _l10n_hu_edi_request_cancel_single_batch(self, code, reason):
@@ -764,7 +765,7 @@ class AccountMove(models.Model):
         ]
 
         try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.l10n_hu_edi_credentials_id.sudo())
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_messages': {
@@ -778,7 +779,7 @@ class AccountMove(models.Model):
 
         try:
             transaction_code = self.env['l10n_hu_edi.connection']._do_manage_annulment(
-                self.l10n_hu_edi_credentials_id.sudo(),
+                self.company_id._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 annulment_operations,
             )

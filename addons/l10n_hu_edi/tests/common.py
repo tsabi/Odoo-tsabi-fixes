@@ -25,7 +25,7 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
             'vat': '27725414-2-13',
         })
 
-        company.l10n_hu_edi_primary_credentials_id = cls.create_edi_credentials()
+        cls.write_edi_credentials()
 
         # Products
         cls.product_service = cls.env['product.product'].create({
@@ -123,19 +123,16 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
         })
 
     @classmethod
-    def create_edi_credentials(cls):
+    def write_edi_credentials(cls):
         # Set up test EDI user
-        with mock.patch.object(type(cls.env['l10n_hu_edi.credentials']), 'test', autospec=True):
-            return cls.env['l10n_hu_edi.credentials'].sudo().create([
-                {
-                    'mode': 'test',
-                    'company_id': cls.company_data['company'].id,
-                    'username': 'this',
-                    'password': 'that',
-                    'signature_key': 'some_key',
-                    'replacement_key': 'abcdefghijklmnop',
-                }
-            ])
+        with mock.patch.object(type(cls.env['res.company']), '_l10n_hu_edi_test_credentials', autospec=True):
+            return cls.company_data['company'].write({
+                'l10n_hu_edi_server_mode': 'test',
+                'l10n_hu_edi_username': 'this',
+                'l10n_hu_edi_password': 'that',
+                'l10n_hu_edi_signature_key': 'some_key',
+                'l10n_hu_edi_replacement_key': 'abcdefghijklmnop',
+            })
 
     def create_invoice_simple(self):
         """ Create a really basic invoice - just one line. """
