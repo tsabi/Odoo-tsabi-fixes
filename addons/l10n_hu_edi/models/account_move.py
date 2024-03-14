@@ -81,7 +81,7 @@ class AccountMove(models.Model):
     )
     l10n_hu_invoice_chain_index = fields.Integer(
         string='Invoice Chain Index',
-        help='For base invoices: the length of the chain. For modification invoices: the index in the chain.',
+        help='Index in the chain of modification invoices.',
         copy=False,
     )
     l10n_hu_edi_credentials_mode = fields.Selection(
@@ -139,7 +139,7 @@ class AccountMove(models.Model):
         if not self:
             return True
         valid_states = {
-            'start': [False],
+            'start': [False, 'rejected', 'cancelled'],
             'upload': ['to_send'],
             'query_status': ['sent', 'cancel_sent', 'cancel_pending'],
             'recover_timeout': ['send_timeout', 'cancel_timeout'],
@@ -150,8 +150,18 @@ class AccountMove(models.Model):
             and move.is_sale_document()
             and move.state == 'posted'
             and any(move.l10n_hu_edi_state in valid_states.get(action, []) for action in actions)
-            # Ensure that invoices created before l10n_hu_edi is installed can't be sent.
+            # Ensure that invoices where the chain index is not set can't be sent.
             and move.l10n_hu_invoice_chain_index is not False
+            # Ensure that an invoice cannot be sent before all previous modification invoices have been confirmed.
+            and (
+                (chain_base := move._l10n_hu_get_chain_base()) is None
+                or all(
+                    m.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']
+                    for m in chain_base._l10n_hu_get_chain_invoices().filtered(
+                        lambda m: m.l10n_hu_invoice_chain_index < move.l10n_hu_invoice_chain_index
+                    )
+                )
+            )
             for move in self
         )
         if raise_if_cannot and not can_process:
@@ -167,12 +177,12 @@ class AccountMove(models.Model):
         return base_invoice if base_invoice != self else None
 
     def _l10n_hu_get_chain_invoices(self):
-        """ Given a base invoice, get all invoices in the chain. """
+        """ Given a base invoice, get all invoices in the chain that already have an index, sorted by index. """
         self.ensure_one()
         chain_invoices = self
         while chain_invoices != chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids:
             chain_invoices = chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids
-        return chain_invoices - self
+        return (self | chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index)).sorted(lambda m: m.l10n_hu_invoice_chain_index)
 
     def _l10n_hu_get_currency_rate(self):
         """ Get the invoice currency / HUF rate.
@@ -247,37 +257,31 @@ class AccountMove(models.Model):
         return super()._post(soft=soft)
 
     def _l10n_hu_edi_set_chain_index_and_line_number(self):
-        """ Set the l10n_hu_invoice_chain_index and l10n_hu_line_number fields at posting. """
+        """ Set the l10n_hu_invoice_chain_index and l10n_hu_line_number fields. """
         self.ensure_one()
         base_invoice = self._l10n_hu_get_chain_base()
         if base_invoice is None:
-            if not self.l10n_hu_invoice_chain_index:
-                # This field has a meaning only for modification invoices, however, in our implementation, we also set it
-                # on base invoices as a way of controlling concurrency, to ensure that the chain sequence is unique and gap-less.
-                self.l10n_hu_invoice_chain_index = 0
+            self.l10n_hu_invoice_chain_index = 0
             next_line_number = 1
         else:
-            if not self.l10n_hu_invoice_chain_index:
-                base_invoice.l10n_hu_invoice_chain_index += 1
-                # If two invoices of the same chain are posted simultaneously, this will trigger a serialization error,
-                # ensuring sequence integrity.
-                base_invoice.flush_recordset(fnames=['l10n_hu_invoice_chain_index'])
-                self.l10n_hu_invoice_chain_index = base_invoice.l10n_hu_invoice_chain_index
+            # Lock base invoice to prevent concurrent updates, ensuring sequence integrity.
+            base_invoice._l10n_hu_edi_acquire_lock(commit=False)
 
-            prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices() - self
-            if prev_chain_invoices:
-                last_chain_invoice = max(prev_chain_invoices, key=lambda m: m.l10n_hu_invoice_chain_index)
+            prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices()
+            if not self.l10n_hu_invoice_chain_index:
+                last_chain_invoice = prev_chain_invoices[-1]
+                self.l10n_hu_invoice_chain_index = last_chain_invoice.l10n_hu_invoice_chain_index + 1
             else:
-                last_chain_invoice = base_invoice
+                last_chain_invoice = prev_chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index == self.l10n_hu_invoice_chain_index - 1)
+
             next_line_number = (max(last_chain_invoice.line_ids.mapped('l10n_hu_line_number')) or 0) + 1
 
         # Set l10n_hu_line_number consecutively, first on product lines, then on rounding line
-        for product_line in self.invoice_line_ids.filtered(lambda l: l.display_type == 'product'):
-            product_line.l10n_hu_line_number = next_line_number
-            next_line_number += 1
-        for rounding_line in self.line_ids.filtered(lambda l: l.display_type == 'rounding'):
-            rounding_line.l10n_hu_line_number = next_line_number
-            next_line_number += 1
+        for line_number, line in enumerate(
+            self.line_ids.filtered(lambda l: l.display_type in ['product', 'rounding']).sorted(lambda l: l.display_type),
+            start=next_line_number,
+        ):
+            line.l10n_hu_line_number = line_number
 
     # === EDI: Flow === #
 
@@ -427,7 +431,15 @@ class AccountMove(models.Model):
         invoice_operations = [
             {
                 'index': invoice.l10n_hu_edi_batch_upload_index,
-                'operation': 'MODIFY' if invoice.reversed_entry_id or invoice.debit_origin_id else 'CREATE',
+                'operation': (
+                    'CREATE' if (base_invoice := invoice._l10n_hu_get_chain_base()) is None else (
+                        'STORNO' if (
+                            base_invoice._get_reconciled_amls().move_id == invoice
+                            and invoice.currency_id.is_zero(invoice.amount_residual)
+                            and base_invoice.currency_id.is_zero(base_invoice.amount_residual)
+                        ) else 'MODIFY'
+                    )
+                ),
                 'invoice_data': base64.b64decode(invoice.l10n_hu_edi_attachment),
             }
             for invoice in self
@@ -587,7 +599,7 @@ class AccountMove(models.Model):
                     })
                 elif annulment_status == 'VERIFICATION_DONE':
                     # Annulling a base invoice will also annul all its modification invoices on NAV.
-                    to_cancel = self if not self.reversal_move_id and not self.debit_note_ids else self._l10n_hu_get_chain_invoices()
+                    to_cancel = self if self.reversed_entry_id or self.debit_origin_id else self._l10n_hu_get_chain_invoices().filtered(lambda m: m.l10n_hu_edi_state)
                     to_cancel.write({
                         'l10n_hu_edi_state': 'cancelled',
                         'l10n_hu_edi_messages': {
@@ -867,7 +879,7 @@ class AccountMove(models.Model):
             line_values = {
                 'line': line,
                 'lineNumber': line.l10n_hu_line_number - line_number_offset,
-                'lineNumberReference': line.l10n_hu_line_number,
+                'lineNumberReference': self._l10n_hu_get_chain_base() and line.l10n_hu_line_number,
                 'lineExpressionIndicator': line.product_id and line.product_uom_id,
                 'lineNatureIndicator': {False: 'OTHER', 'service': 'SERVICE'}.get(line.product_id.type, 'PRODUCT'),
                 'lineDescription': line.name.replace('\n', ' '),
@@ -1030,9 +1042,9 @@ class AccountMove(models.Model):
     # === Helpers === #
 
     @contextlib.contextmanager
-    def _l10n_hu_edi_acquire_lock(self, no_commit=False):
+    def _l10n_hu_edi_acquire_lock(self, commit=True):
         """ Acquire a write lock on the invoices in self.
-            On exit, commit to DB unless no_commit is True.
+        :param commit bool: On exit, commit to DB.
         """
         if not self:
             yield
@@ -1045,7 +1057,7 @@ class AccountMove(models.Model):
                 raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?'))
             raise
         yield
-        if self.env['account.move.send']._can_commit() and not no_commit:
+        if self.env['account.move.send']._can_commit() and commit:
             self.env.cr.commit()
 
 

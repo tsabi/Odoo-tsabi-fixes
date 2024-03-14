@@ -106,6 +106,12 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
+    def test_cancel_invoice_pending(self):
+        invoice, cancel_wizard = self.create_cancel_wizard()
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+        cancel_wizard.button_request_cancel()
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancel_pending'}])
+
     # === Helpers === #
 
     @contextlib.contextmanager

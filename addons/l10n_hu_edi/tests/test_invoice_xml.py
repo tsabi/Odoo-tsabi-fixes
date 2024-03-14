@@ -26,6 +26,9 @@ class L10nHuEdiTestInvoiceXml(L10nHuEdiTestCommon):
                     self.get_xml_tree_from_string(expected_xml_file.read()),
                 )
 
+            # Set invoice state to 'confirmed', otherwise the credit note can't be sent
+            invoice.write({'l10n_hu_edi_state': 'confirmed'})
+
             credit_note = self.create_reversal(invoice)
             credit_note.action_post()
             credit_note._l10n_hu_edi_start()

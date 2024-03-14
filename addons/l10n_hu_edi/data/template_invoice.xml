@@ -154,7 +154,7 @@
     <template id="nav_online_invoice_xml_3_0_line">
         <t t-set="line" t-value="line_values['line']"/>
         <lineNumber t-out="line_values['lineNumber']"/>
-        <lineModificationReference t-if="invoice.reversed_entry_id">
+        <lineModificationReference t-if="line_values['lineNumberReference']">
             <lineNumberReference t-out="line_values['lineNumberReference']"/>
             <lineOperation>CREATE</lineOperation>
         </lineModificationReference>

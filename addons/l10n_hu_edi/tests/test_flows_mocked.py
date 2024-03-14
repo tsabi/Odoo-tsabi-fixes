@@ -36,6 +36,44 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
 
+            cancel_wizard = self.env['l10n_hu_edi.cancellation'].with_context({"default_invoice_id": credit_note.id}).create({
+                'code': 'ERRATIC_DATA',
+                'reason': 'Some reason...',
+            })
+            cancel_wizard.button_request_cancel()
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending'}])
+
+    def test_send_modification_order(self):
+        """ Test that the order of sending (original invoice -> credit note -> modification invoice) is enforced. """
+        with self.patch_post(), \
+                freeze_time('2024-01-25T15:28:53Z'):
+            invoice = self.create_invoice_simple()
+            invoice.action_post()
+
+            # Cannot create credit note: first the invoice must be confirmed.
+            with self.assertRaises(UserError):
+                invoice.action_reverse()
+
+            send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
+            send_and_print.action_send_and_print()
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
+            new_invoice = self.create_reversal(invoice, is_modify=True)
+            self.assertRecordValues(new_invoice, [{'debit_origin_id': invoice.id}])
+            new_invoice.action_post()
+            credit_note = invoice.reversal_move_id
+
+            # Cannot send modification invoice: first, the credit note must be confirmed.
+            self.assertFalse(new_invoice._l10n_hu_edi_can_process(['start']))
+
+            send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
+            send_and_print.action_send_and_print()
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
+
+            send_and_print = self.create_send_and_print(new_invoice, l10n_hu_edi_enable_nav_30=True)
+            send_and_print.action_send_and_print()
+            self.assertRecordValues(new_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
     def test_send_invoice_warning(self):
         with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_warning.xml', 'r') as response_file:
             response_data = response_file.read()
@@ -132,6 +170,52 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             with self.patch_post({'queryTransactionStatus': response_data}):
                 cancel_wizard.button_request_cancel()
                 self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancelled', 'state': 'cancel'}])
+
+    def test_cancel_and_resend(self):
+        """ Test the sending, annulment and re-sending of an invoice + credit note + modif. invoice """
+        with freeze_time('2024-01-25T15:28:53Z'):
+            with self.patch_post():
+                invoice, cancel_wizard = self.create_cancel_wizard()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
+                new_invoice = self.create_reversal(invoice, is_modify=True)
+                self.assertRecordValues(new_invoice, [{'debit_origin_id': invoice.id}])
+                new_invoice.action_post()
+                credit_note = invoice.reversal_move_id
+
+                send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
+                send_and_print.action_send_and_print()
+                self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
+
+                send_and_print = self.create_send_and_print(new_invoice, l10n_hu_edi_enable_nav_30=True)
+                send_and_print.action_send_and_print()
+                self.assertRecordValues(new_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
+            with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_annulment_done.xml', 'r') as response_file:
+                response_data = response_file.read()
+            with self.patch_post({'queryTransactionStatus': response_data}):
+                cancel_wizard.button_request_cancel()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'cancelled', 'state': 'cancel'}])
+                self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancelled', 'state': 'cancel'}])
+                self.assertRecordValues(new_invoice, [{'l10n_hu_edi_state': 'cancelled', 'state': 'cancel'}])
+
+            (invoice | credit_note | new_invoice).button_draft()
+            invoice.action_post()
+            credit_note.action_post()
+            new_invoice.action_post()
+
+            with self.patch_post():
+                send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
+                send_and_print.action_send_and_print()
+                self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
+                send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
+                send_and_print.action_send_and_print()
+                self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
+
+                send_and_print = self.create_send_and_print(new_invoice, l10n_hu_edi_enable_nav_30=True)
+                send_and_print.action_send_and_print()
+                self.assertRecordValues(new_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 
     # === Helpers === #
 

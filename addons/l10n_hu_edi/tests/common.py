@@ -233,13 +233,12 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
             ]
         })
 
-    def create_reversal(self, invoice):
+    def create_reversal(self, invoice, is_modify=False):
         """ Create a credit note that reverses an invoice. """
         wizard_vals = {'journal_id': invoice.journal_id.id}
         wizard_reverse = self.env['account.move.reversal'].with_context(active_ids=invoice.ids, active_model='account.move').create(wizard_vals)
-        reverse_moves_dict = wizard_reverse.reverse_moves()
-        reverse_move = self.env['account.move'].browse(reverse_moves_dict.get('res_id', False))
-        return reverse_move
+        wizard_reverse.reverse_moves(is_modify=is_modify)
+        return wizard_reverse.new_move_ids
 
     def create_cancel_wizard(self):
         """ Create an invoice, send it, and create a cancellation wizard for it. """
