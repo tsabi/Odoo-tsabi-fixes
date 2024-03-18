@@ -64,7 +64,8 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             credit_note = invoice.reversal_move_id
 
             # Cannot send modification invoice: first, the credit note must be confirmed.
-            self.assertFalse(new_invoice._l10n_hu_edi_can_process(['start']))
+            with self.assertRaises(UserError):
+                new_invoice._l10n_hu_edi_start()
 
             send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()

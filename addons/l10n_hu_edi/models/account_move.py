@@ -28,14 +28,13 @@ class AccountMove(models.Model):
     l10n_hu_edi_state = fields.Selection(
         ######################################################################################################################
         # STATE DIAGRAM
-        # * False --[start]--> to_send
+        # * False, rejected, cancelled --[start]--> to_send
         # * to_send --[upload]--> to_send, sent, send_timeout
         # * sent --[query_status]--> sent, confirmed, confirmed_warning, rejected
         # * confirmed, confirmed_warning --[request_cancel]--> cancel_sent, cancel_timeout
         # * cancel_sent, cancel_pending --[query_status]--> confirmed_warning, cancel_pending, cancelled
         # * send_timeout --[recover_timeout]--> to_send, send_timeout, confirmed, confirmed_warning, rejected,
         # * cancel_timeout --[recover_timeout]--> confirmed_warning, cancel_sent, cancel_timeout, cancel_pending, cancelled
-        # * rejected, cancelled: are final states
         ######################################################################################################################
         selection=[
             ('to_send', 'To Send'),
@@ -84,6 +83,10 @@ class AccountMove(models.Model):
         selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
         string='Server Mode',
     )
+    l10n_hu_edi_show_button_update_status = fields.Char(
+        string='Technical field to show the Update Status button',
+        compute='_compute_l10n_hu_edi_show_button_update_status',
+    )
     l10n_hu_edi_attachment_filename = fields.Char(
         string='Invoice XML filename',
         compute='_compute_l10n_hu_edi_attachment_filename',
@@ -102,7 +105,7 @@ class AccountMove(models.Model):
             if move.state in ['draft', 'cancel'] and move.l10n_hu_edi_state not in [False, 'to_send', 'rejected', 'cancelled']:
                 raise ValidationError(_('Cannot reset to draft or cancel invoice %s because an electronic document was already sent to NAV!', move.name))
 
-    # === Computes / Getters === #
+    # === Computes === #
 
     @api.depends('l10n_hu_edi_messages')
     def _compute_message_html(self):
@@ -127,82 +130,10 @@ class AccountMove(models.Model):
         for move in self:
             move.l10n_hu_edi_attachment_filename = f'{move.name.replace("/", "_")}.xml'
 
-    def _l10n_hu_edi_can_process(self, actions, raise_if_cannot=False):
-        """ Returns whether one or more actions may be performed on a given invoice, given its state.
-        """
-        if not self:
-            return True
-        valid_states = {
-            'start': [False, 'rejected', 'cancelled'],
-            'upload': ['to_send'],
-            'query_status': ['sent', 'cancel_sent', 'cancel_pending'],
-            'recover_timeout': ['send_timeout', 'cancel_timeout'],
-            'request_cancel': ['confirmed', 'confirmed_warning'],
-        }
-        can_process = all(
-            move.country_code == 'HU'
-            and move.is_sale_document()
-            and move.state == 'posted'
-            and any(move.l10n_hu_edi_state in valid_states.get(action, []) for action in actions)
-            # Only process production moves when the company credentials are production
-            and (
-                'start' in actions and move.company_id.l10n_hu_edi_server_mode
-                or move.l10n_hu_edi_server_mode == move.company_id.l10n_hu_edi_server_mode
-            )
-            # Ensure that invoices where the chain index is not set can't be sent.
-            and move.l10n_hu_invoice_chain_index is not False
-            # Ensure that an invoice cannot be sent before all previous modification invoices have been confirmed.
-            and (
-                (chain_base := move._l10n_hu_get_chain_base()) is None
-                or all(
-                    m.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']
-                    for m in chain_base._l10n_hu_get_chain_invoices().filtered(
-                        lambda m: m.l10n_hu_invoice_chain_index < move.l10n_hu_invoice_chain_index
-                    )
-                )
-            )
-            for move in self
-        )
-        if raise_if_cannot and not can_process:
-            raise UserError(_('Invalid start states %s!', self.mapped('l10n_hu_edi_state')))
-        return can_process
-
-    def _l10n_hu_get_chain_base(self):
-        """ Get the base invoice of the invoice chain, or None if this is already a base invoice. """
-        self.ensure_one()
-        base_invoice = self
-        while base_invoice.reversed_entry_id or base_invoice.debit_origin_id:
-            base_invoice = base_invoice.reversed_entry_id or base_invoice.debit_origin_id
-        return base_invoice if base_invoice != self else None
-
-    def _l10n_hu_get_chain_invoices(self):
-        """ Given a base invoice, get all invoices in the chain that already have an index, sorted by index. """
-        self.ensure_one()
-        chain_invoices = self
-        while chain_invoices != chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids:
-            chain_invoices = chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids
-        return (self | chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index)).sorted(lambda m: m.l10n_hu_invoice_chain_index)
-
-    def _l10n_hu_get_currency_rate(self):
-        """ Get the invoice currency / HUF rate.
-
-        If the company currency is HUF, we estimate this based on the invoice lines,
-        using a MMSE estimator assuming random (Gaussian) rounding errors.
-
-        Otherwise, we get the rate from the currency rates.
-        """
-        if self.currency_id.name == 'HUF':
-            return 1
-        if self.company_id.currency_id.name == 'HUF':
-            squared_amount_currency = sum(line.amount_currency ** 2 for line in self.invoice_line_ids)
-            squared_balance = sum(line.balance ** 2 for line in self.invoice_line_ids)
-            return math.sqrt(squared_balance / squared_amount_currency)
-        return self.env['res.currency']._get_conversion_rate(
-            from_currency=self.currency_id,
-            to_currency=self.env.ref('base.HUF'),
-            company=self.company_id,
-            date=self.invoice_date,
-        )
+    @api.depends('l10n_hu_edi_state')
+    def _compute_l10n_hu_edi_show_button_update_status(self):
+        for move in self:
+            move.l10n_hu_edi_show_button_update_status = move._l10n_hu_edi_get_valid_action() in ['upload', 'query_status', 'recover_timeout']
 
     # === Overrides === #
 
@@ -256,6 +187,104 @@ class AccountMove(models.Model):
             move._l10n_hu_edi_set_chain_index_and_line_number()
         return super()._post(soft=soft)
 
+    # === Actions === #
+
+    def l10n_hu_edi_button_update_status(self):
+        self.ensure_one()
+        action = self._l10n_hu_edi_get_valid_action()
+        if action == 'upload':
+            self._l10n_hu_edi_upload()
+        elif action == 'query_status':
+            self._l10n_hu_edi_query_status()
+        elif action == 'recover_timeout':
+            self._l10n_hu_edi_recover_timeout()
+
+    # === Helpers === #
+
+    def _l10n_hu_edi_get_valid_action(self):
+        """ If a NAV 3.0 flow is applicable to the given invoice, return it, else None.
+        """
+        self.ensure_one()
+        states_by_action = {
+            'start': [False, 'rejected', 'cancelled'],
+            'upload': ['to_send'],
+            'query_status': ['sent', 'cancel_sent', 'cancel_pending'],
+            'recover_timeout': ['send_timeout', 'cancel_timeout'],
+            'request_cancel': ['confirmed', 'confirmed_warning'],
+        }
+        for action, states in states_by_action.items():
+            if self.l10n_hu_edi_state in states:
+                break
+        else:
+            return
+
+        if (
+            self.country_code == 'HU'
+            and self.is_sale_document()
+            and self.state == 'posted'
+            # Only process moves that are in the same server mode (test/production) as the company (except if we are sending a new XML)
+            and (
+                self.l10n_hu_edi_server_mode == self.company_id.l10n_hu_edi_server_mode
+                or action == 'start' and self.company_id.l10n_hu_edi_server_mode
+            )
+            # Ensure that invoices where the chain index is not set can't be sent.
+            and self.l10n_hu_invoice_chain_index is not False
+            # Ensure that an invoice cannot be sent before all previous modification invoices have been confirmed.
+            and (
+                (chain_base := self._l10n_hu_get_chain_base()) is None
+                or all(
+                    m.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']
+                    for m in chain_base._l10n_hu_get_chain_invoices().filtered(
+                        lambda m: m.l10n_hu_invoice_chain_index < self.l10n_hu_invoice_chain_index
+                    )
+                )
+            )
+        ):
+            return action
+
+    def _l10n_hu_edi_check_action(self, action):
+        """ Raise an error if the given action is not applicable to the invoices in self. """
+        bad_invoices = self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() != action)
+        if bad_invoices:
+            raise UserError(_('Action %s cannot be processed for invoices %s!', action, bad_invoices.mapped('name')))
+
+    def _l10n_hu_get_chain_base(self):
+        """ Get the base invoice of the invoice chain, or None if this is already a base invoice. """
+        self.ensure_one()
+        base_invoice = self
+        while base_invoice.reversed_entry_id or base_invoice.debit_origin_id:
+            base_invoice = base_invoice.reversed_entry_id or base_invoice.debit_origin_id
+        return base_invoice if base_invoice != self else None
+
+    def _l10n_hu_get_chain_invoices(self):
+        """ Given a base invoice, get all invoices in the chain that already have an index, sorted by index. """
+        self.ensure_one()
+        chain_invoices = self
+        while chain_invoices != chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids:
+            chain_invoices = chain_invoices | chain_invoices.reversal_move_id | chain_invoices.debit_note_ids
+        return (self | chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index)).sorted(lambda m: m.l10n_hu_invoice_chain_index)
+
+    def _l10n_hu_get_currency_rate(self):
+        """ Get the invoice currency / HUF rate.
+
+        If the company currency is HUF, we estimate this based on the invoice lines,
+        using a MMSE estimator assuming random (Gaussian) rounding errors.
+
+        Otherwise, we get the rate from the currency rates.
+        """
+        if self.currency_id.name == 'HUF':
+            return 1
+        if self.company_id.currency_id.name == 'HUF':
+            squared_amount_currency = sum(line.amount_currency ** 2 for line in self.invoice_line_ids)
+            squared_balance = sum(line.balance ** 2 for line in self.invoice_line_ids)
+            return math.sqrt(squared_balance / squared_amount_currency)
+        return self.env['res.currency']._get_conversion_rate(
+            from_currency=self.currency_id,
+            to_currency=self.env.ref('base.HUF'),
+            company=self.company_id,
+            date=self.invoice_date,
+        )
+
     def _l10n_hu_edi_set_chain_index_and_line_number(self):
         """ Set the l10n_hu_invoice_chain_index and l10n_hu_line_number fields. """
         self.ensure_one()
@@ -282,6 +311,25 @@ class AccountMove(models.Model):
             start=next_line_number,
         ):
             line.l10n_hu_line_number = line_number
+
+    @contextlib.contextmanager
+    def _l10n_hu_edi_acquire_lock(self, commit=True):
+        """ Acquire a write lock on the invoices in self.
+        :param commit bool: On exit, commit to DB.
+        """
+        if not self:
+            yield
+            return
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute('SELECT * FROM account_move WHERE id IN %s FOR UPDATE NOWAIT', [tuple(self.ids)])
+        except OperationalError as e:
+            if e.pgcode == '55P03':
+                raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?'))
+            raise
+        yield
+        if self.env['account.move.send']._can_commit() and commit:
+            self.env.cr.commit()
 
     # === EDI: Flow === #
 
@@ -394,7 +442,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_start(self):
         """ Generate the invoice XMLs and queue them for sending. """
-        self._l10n_hu_edi_can_process(['start'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('start')
         for invoice in self:
             invoice.write({
                 'l10n_hu_edi_state': 'to_send',
@@ -414,7 +462,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_upload(self):
         """ Send the invoice XMLs to NAV. """
-        self._l10n_hu_edi_can_process(['upload'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('upload')
         with self._l10n_hu_edi_acquire_lock():
             # Batch by company, with max 100 invoices per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
@@ -422,7 +470,7 @@ class AccountMove(models.Model):
                     self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch()
 
     def _l10n_hu_edi_upload_single_batch(self):
-        self._l10n_hu_edi_can_process(['upload'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('upload')
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
 
@@ -496,7 +544,7 @@ class AccountMove(models.Model):
             ('l10n_hu_edi_transaction_code', 'in', self.mapped('l10n_hu_edi_transaction_code')),
             ('l10n_hu_edi_state', 'in', ['sent', 'cancel_sent']),
         ])
-        self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('query_status')
 
         with self._l10n_hu_edi_acquire_lock():
             # Querying status should be grouped by company and transaction code
@@ -505,7 +553,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_query_status_single_batch(self):
         """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
-        self._l10n_hu_edi_can_process(['query_status'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('query_status')
         try:
             results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
                 self.company_id._l10n_hu_edi_get_credentials_dict(),
@@ -638,7 +686,7 @@ class AccountMove(models.Model):
     def _l10n_hu_edi_recover_timeout(self):
         """ Attempt to recover all invoices in `self` from an upload timeout """
         # Only attempt to recover from a timeout for invoices sent more than 6 minutes ago.
-        self._l10n_hu_edi_can_process(['recover_timeout'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('recover_timeout')
         self = self.filtered(lambda m: m.l10n_hu_edi_send_time <= fields.Datetime.now() - timedelta(minutes=6))
         with self._l10n_hu_edi_acquire_lock():
             # Group by company.
@@ -655,7 +703,7 @@ class AccountMove(models.Model):
                     invoices._l10n_hu_edi_recover_timeout_single_batch()
 
     def _l10n_hu_edi_recover_timeout_single_batch(self):
-        self._l10n_hu_edi_can_process(['recover_timeout'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('recover_timeout')
         datetime_from = min(self.mapped('l10n_hu_edi_send_time'))
         datetime_to = max(self.mapped('l10n_hu_edi_send_time')) + timedelta(minutes=7)
 
@@ -744,7 +792,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_request_cancel(self, code, reason):
         """ Send a cancellation request for all invoices in `self`. """
-        self._l10n_hu_edi_can_process(['request_cancel'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('request_cancel')
         with self._l10n_hu_edi_acquire_lock():
             # Batch by company, with max 100 annulment requests per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
@@ -752,7 +800,7 @@ class AccountMove(models.Model):
                     self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(code, reason)
 
     def _l10n_hu_edi_request_cancel_single_batch(self, code, reason):
-        self._l10n_hu_edi_can_process(['request_cancel'], raise_if_cannot=True)
+        self._l10n_hu_edi_check_action('request_cancel')
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
 
@@ -1041,27 +1089,6 @@ class AccountMove(models.Model):
         )
 
         return tax_totals
-
-    # === Helpers === #
-
-    @contextlib.contextmanager
-    def _l10n_hu_edi_acquire_lock(self, commit=True):
-        """ Acquire a write lock on the invoices in self.
-        :param commit bool: On exit, commit to DB.
-        """
-        if not self:
-            yield
-            return
-        try:
-            with self.env.cr.savepoint(flush=False):
-                self.env.cr.execute('SELECT * FROM account_move WHERE id IN %s FOR UPDATE NOWAIT', [tuple(self.ids)])
-        except OperationalError as e:
-            if e.pgcode == '55P03':
-                raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?'))
-            raise
-        yield
-        if self.env['account.move.send']._can_commit() and commit:
-            self.env.cr.commit()
 
 
 class AccountInvoiceLine(models.Model):
