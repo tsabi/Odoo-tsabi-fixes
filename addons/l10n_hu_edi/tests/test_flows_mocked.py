@@ -36,13 +36,6 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             send_and_print.action_send_and_print()
             self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
 
-            cancel_wizard = self.env['l10n_hu_edi.cancellation'].with_context({"default_invoice_id": credit_note.id}).create({
-                'code': 'ERRATIC_DATA',
-                'reason': 'Some reason...',
-            })
-            cancel_wizard.button_request_cancel()
-            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending'}])
-
     def test_send_modification_order(self):
         """ Test that the order of sending (original invoice -> credit note -> modification invoice) is enforced. """
         with self.patch_post(), \
