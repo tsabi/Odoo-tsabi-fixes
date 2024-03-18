@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <record id="account_move_form_inherit_l10n_hu_edi" model="ir.ui.view">
+    <record id="view_invoice_tree_inherit_l10n_hu_edi" model="ir.ui.view">
+        <field name="name">account.invoice.tree.inherit.l10n_hu_edi</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_invoice_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//tree" position="inside">
+                <field name="l10n_hu_edi_state" optional="hide"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_move_form_inherit_l10n_hu_edi" model="ir.ui.view">
         <field name="name">account.move.form.inherit.l10n_hu_edi</field>
         <field name="model">account.move</field>
         <field name="inherit_id" ref="account.view_move_form"/>
@@ -12,6 +23,14 @@
                         type="object"
                         groups="account.group_account_invoice"
                         invisible="not l10n_hu_edi_show_button_update_status"/>
+            </xpath>
+
+            <xpath expr="//sheet" position="before">
+                <div class="alert alert-warning mb-0" role="alert"
+                     invisible="l10n_hu_edi_messages and l10n_hu_edi_messages.get('blocking_level') != 'error_but_continue'">
+                    <field name="l10n_hu_edi_messages" invisible="1"/>
+                    <field name="l10n_hu_edi_message_html" readonly="1"/>
+            </div>
             </xpath>
 
             <xpath expr="//field[@name='id']" position="before">

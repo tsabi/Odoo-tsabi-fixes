@@ -33,9 +33,7 @@ class AccountMoveSend(models.TransientModel):
     @api.depends('move_ids')
     def _compute_l10n_hu_edi_enable_nav_30(self):
         for wizard in self:
-            enabled_moves = wizard.move_ids.filtered(
-                lambda m: m._l10n_hu_edi_get_valid_action() == 'upload'
-            )._origin
+            enabled_moves = wizard.move_ids.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'upload')._origin
             if wizard.mode in ('invoice_single', 'invoice_multi') and enabled_moves:
                 wizard.l10n_hu_edi_enable_nav_30 = True
                 wizard.l10n_hu_edi_actionable_errors = enabled_moves._l10n_hu_edi_check_invoices()
@@ -56,8 +54,8 @@ class AccountMoveSend(models.TransientModel):
     @api.model
     def _need_invoice_document(self, invoice):
         # EXTENDS 'account'
-        # If the send & print will create a new NAV 3.0 XML, we want to re-generate the PDF at the same time.
-        return super()._need_invoice_document(invoice) or invoice._l10n_hu_edi_get_valid_action() == 'upload'
+        # If the send & print triggers the NAV 3.0 flow, we want to re-generate the PDF.
+        return super()._need_invoice_document(invoice) and invoice.country_code != 'HU' or invoice._l10n_hu_edi_get_valid_action()
 
     @api.model
     def _hook_invoice_document_before_pdf_report_render(self, invoice, invoice_data):
@@ -82,7 +80,11 @@ class AccountMoveSend(models.TransientModel):
             invoice.id
             for invoice, invoice_data in invoices_data.items()
             if invoice_data.get('l10n_hu_edi_checkbox_nav_30')
+               and invoice._l10n_hu_edi_get_valid_action() == 'upload'
         ])
+
+        if not invoices_hu:
+            return
 
         # Pre-emptively acquire write lock on all invoices to be processed
         # Otherwise, we will get a serialization error later
@@ -95,24 +97,34 @@ class AccountMoveSend(models.TransientModel):
                 # If any invoices were just sent, wait so that NAV has enough time to process them
                 time.sleep(2)
 
-            # STEP 2: Timeout recovery
-            invoices_hu.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'recover_timeout')._l10n_hu_edi_recover_timeout()
-
-            # STEP 3: Query status
+            # STEP 2: Query status
             invoices_hu.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'query_status')._l10n_hu_edi_query_status()
 
-            # STEP 4: Schedule update status of pending invoices in 10 minutes.
+            # STEP 3: Schedule update status of pending invoices in 10 minutes.
             if any(m.l10n_hu_edi_state not in [False, 'confirmed', 'confirmed_warning', 'rejected'] for m in invoices_hu):
                 self.env.ref('l10n_hu_edi.ir_cron_update_status')._trigger(at=fields.Datetime.now() + timedelta(minutes=10))
 
-            # STEP 5: Log invoice status in chatter.
+            # STEP 4: Error / success handling.
             for invoice in invoices_hu:
+                # Log outcome in chatter
                 formatted_message = self._format_error_html(invoice.l10n_hu_edi_messages)
                 invoice.with_context(no_new_invoice=True).message_post(body=formatted_message)
 
-                # If we should raise a UserError, update invoice_data to do so
-                if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error':
-                    invoices_data[invoice].update({'error': invoice.l10n_hu_edi_messages})
+                # Update invoice_data with errors
+                blocking_level = invoice.l10n_hu_edi_messages.get('blocking_level')
+                if blocking_level == 'error':
+                    invoices_data[invoice]['error'] = invoice.l10n_hu_edi_messages
+                elif blocking_level == 'error_but_continue':
+                    invoices_data[invoice]['nav_30_error_but_continue'] = invoice.l10n_hu_edi_messages
+
+    @api.model
+    def _link_invoice_documents(self, invoice, invoice_data):
+        # EXTENDS 'account'
+        super()._link_invoice_documents(invoice, invoice_data)
+        # If we have a non-blocking error (intermediate non-confirmed state), we want to first link the PDF,
+        # and then make it a blocking error, so that an e-mail doesn't get sent to the customer.
+        if invoice_data.get('nav_30_error_but_continue'):
+            invoice_data['error'] = invoice_data.pop('nav_30_error_but_continue')
 
     @api.model
     def _l10n_hu_edi_cron_update_status(self):

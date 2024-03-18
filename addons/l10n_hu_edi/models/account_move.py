@@ -67,6 +67,7 @@ class AccountMove(models.Model):
         string='Transaction Code',
         index='trigram',
         copy=False,
+        tracking=True,
     )
     l10n_hu_edi_messages = fields.Json(
         string='Transaction messages (JSON)',
@@ -135,19 +136,6 @@ class AccountMove(models.Model):
 
     # === Overrides === #
 
-    def button_draft(self):
-        # EXTEND account
-        self.filtered(lambda m: m.l10n_hu_edi_state == 'rejected').write({
-            'l10n_hu_edi_state': False,
-            'l10n_hu_edi_server_mode': False,
-            'l10n_hu_edi_batch_upload_index': False,
-            'l10n_hu_edi_attachment': False,
-            'l10n_hu_edi_send_time': False,
-            'l10n_hu_edi_transaction_code': False,
-            'l10n_hu_edi_messages': False,
-        })
-        return super().button_draft()
-
     def action_reverse(self):
         # EXTEND account
         unconfirmed = self.filtered(lambda m: m.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning'])
@@ -198,18 +186,16 @@ class AccountMove(models.Model):
             # Call `query_status` on the invoices.
             self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'query_status')._l10n_hu_edi_query_status()
 
-            invoices_error = {}
+            # Error handling.
             for invoice in self:
                 # Log invoice status in chatter.
                 formatted_message = self.env['account.move.send']._format_error_html(invoice.l10n_hu_edi_messages)
                 invoice.with_context(no_new_invoice=True).message_post(body=formatted_message)
 
-                # If we should raise a UserError, update invoice_data to do so
-                if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error':
-                    invoices_error[invoice] = {'error': invoice.l10n_hu_edi_messages}
-
-            if invoices_error:
-                self.env['account.move.send']._hook_if_errors(invoices_error, from_cron=from_cron)
+            for invoice in self:
+                # If blocking errors, raise UserError.
+                if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error' and not from_cron:
+                    raise UserError(self.env['account.move.send']._format_error_text(invoice.l10n_hu_edi_messages))
 
     # === Helpers === #
 
@@ -507,6 +493,7 @@ class AccountMove(models.Model):
             token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
+                'l10n_hu_edi_state': 'rejected',
                 'l10n_hu_edi_messages': {
                     'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
                     'errors': e.errors,
@@ -529,10 +516,11 @@ class AccountMove(models.Model):
                     'l10n_hu_edi_messages': {
                         'error_title': _('Invoice submission timed out. Please wait at least 6 minutes before updating status.'),
                         'errors': e.errors,
-                        'blocking_level': 'error',
+                        'blocking_level': 'error_but_continue',
                     },
                 })
             return self.write({
+                'l10n_hu_edi_state': 'rejected',
                 'l10n_hu_edi_messages': {
                     'error_title': _('Invoice submission failed.'),
                     'errors': e.errors,
@@ -573,13 +561,22 @@ class AccountMove(models.Model):
                 self[0].l10n_hu_edi_transaction_code,
             )
         except L10nHuEdiConnectionError as e:
-            return self.write({
-                'l10n_hu_edi_messages': {
-                    'error_title': _('The invoice was sent to the NAV, but there was an error querying its status.'),
-                    'errors': e.errors,
-                    'blocking_level': 'error',
-                },
-            })
+            if self.l10n_hu_edi_state == 'sent':
+                return self.write({
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The invoice was sent to the NAV, but there was an error querying its status.'),
+                        'errors': e.errors,
+                        'blocking_level': 'error_but_continue',
+                    },
+                })
+            else:
+                return self.write({
+                    'l10n_hu_edi_messages': {
+                        'error_title': _('The annulment was sent to the NAV, but there was an error querying its status.'),
+                        'errors': e.errors,
+                        'blocking_level': 'error_but_continue',
+                    },
+                })
 
         for processing_result in results['processing_results']:
             invoice = self.filtered(lambda m: str(m.l10n_hu_edi_batch_upload_index) == processing_result['index'])
@@ -608,7 +605,7 @@ class AccountMove(models.Model):
                     'l10n_hu_edi_messages': {
                         'error_title': _('The invoice was received by the NAV, but has not been confirmed yet.'),
                         'errors': get_errors_from_processing_result(processing_result),
-                        'blocking_level': 'error',
+                        'blocking_level': 'error_but_continue',
                     },
                 })
             elif self.l10n_hu_edi_state in ['cancel_sent', 'cancel_timeout']:
@@ -617,11 +614,10 @@ class AccountMove(models.Model):
                     'l10n_hu_edi_messages': {
                         'error_title': _('The annulment request was received by the NAV, but has not been confirmed yet.'),
                         'errors': get_errors_from_processing_result(processing_result),
-                        'blocking_level': 'error',
+                        'blocking_level': 'error_but_continue',
                     },
                 })
 
-        # Invoice case
         elif processing_result['invoice_status'] == 'DONE':
             if self.l10n_hu_edi_state in ['sent', 'send_timeout']:
                 if not processing_result['business_validation_messages'] and not processing_result['technical_validation_messages']:
@@ -636,9 +632,12 @@ class AccountMove(models.Model):
                     self.write({
                         'l10n_hu_edi_state': 'confirmed_warning',
                         'l10n_hu_edi_messages': {
-                            'error_title': _('The invoice was accepted by the NAV, but warnings were reported. To reverse, create a credit note.'),
+                            'error_title': _(
+                                'The invoice was accepted by the NAV, but warnings were reported. '
+                                'To reverse, create a credit note / debit note.'
+                            ),
                             'errors': get_errors_from_processing_result(processing_result),
-                            'blocking_level': 'error',
+                            'blocking_level': 'error_but_continue',
                         },
                     })
             elif self.l10n_hu_edi_state in ['cancel_sent', 'cancel_timeout', 'cancel_pending']:
@@ -648,7 +647,7 @@ class AccountMove(models.Model):
                         'l10n_hu_edi_messages': {
                             'error_title': _('The annulment request was rejected by NAV.'),
                             'errors': get_errors_from_processing_result(processing_result),
-                            'blocking_level': 'error',
+                            'blocking_level': 'error_but_continue',
                         },
                     })
                 elif annulment_status == 'VERIFICATION_PENDING':
@@ -657,6 +656,7 @@ class AccountMove(models.Model):
                         'l10n_hu_edi_messages': {
                             'error_title': _('The annulment request is pending, please confirm it on the OnlineSzámla portal.'),
                             'errors': get_errors_from_processing_result(processing_result),
+                            'blocking_level': 'error_but_continue',
                         }
                     })
                 elif annulment_status == 'VERIFICATION_DONE':
@@ -740,7 +740,7 @@ class AccountMove(models.Model):
                     'l10n_hu_edi_messages': {
                         'error_title': _('Error querying active transactions while attempting timeout recovery.'),
                         'errors': e.errors,
-                        'blocking_level': 'error',
+                        'blocking_level': 'error_but_continue',
                     },
                 })
 
@@ -763,7 +763,7 @@ class AccountMove(models.Model):
                         'l10n_hu_edi_messages': {
                             'error_title': _('Error querying active transactions while attempting timeout recovery.'),
                             'errors': e.errors,
-                            'blocking_level': 'error',
+                            'blocking_level': 'error_but_continue',
                         },
                     })
 
@@ -857,7 +857,7 @@ class AccountMove(models.Model):
                     'l10n_hu_edi_messages': {
                         'error_title': _('Cancellation request timed out.'),
                         'errors': e.errors,
-                        'blocking_level': 'error',
+                        'blocking_level': 'error_but_continue',
                     },
                 })
             return self.write({
