@@ -15,7 +15,7 @@ class IrAttachment(models.Model):
             att.res_model == 'account.move'
             and att.res_field in ['invoice_pdf_report_file', 'l10n_hu_edi_attachment']
             and (move := self.env['account.move'].browse(att.res_id).exists())
-            and move.l10n_hu_edi_state not in [False, 'to_send', 'rejected']
+            and move.l10n_hu_edi_state not in [False, 'rejected', 'cancelled']
             and move.l10n_hu_edi_server_mode == 'production'
             for att in self
         ):

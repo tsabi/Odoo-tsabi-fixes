@@ -68,14 +68,17 @@ class ResCompany(models.Model):
 
     def _l10n_hu_edi_get_credentials_dict(self):
         self.ensure_one()
-        return {
-            'vat': self.vat or '',
-            'mode': self.l10n_hu_edi_server_mode or '',
-            'username': self.l10n_hu_edi_username or '',
-            'password': self.l10n_hu_edi_password or '',
-            'signature_key': self.l10n_hu_edi_signature_key or '',
-            'replacement_key': self.l10n_hu_edi_replacement_key or '',
+        credentials_dict = {
+            'vat': self.vat,
+            'mode': self.l10n_hu_edi_server_mode,
+            'username': self.l10n_hu_edi_username,
+            'password': self.l10n_hu_edi_password,
+            'signature_key': self.l10n_hu_edi_signature_key,
+            'replacement_key': self.l10n_hu_edi_replacement_key,
         }
+        if any(not v for v in credentials_dict.values()):
+            raise UserError(_('Missing NAV credentials for company %s', self.name))
+        return credentials_dict
 
     def _l10n_hu_edi_test_credentials(self):
         for company in self:
