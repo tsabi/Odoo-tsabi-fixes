@@ -2,6 +2,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import fields, models, api, _
+from odoo.http import request
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, groupby
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
@@ -230,13 +231,14 @@ class AccountMove(models.Model):
 
     def _need_cancel_request(self):
         # EXTEND account
-        return super()._need_cancel_request() or self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']
+        # Technical annulment should be available only in debug mode
+        return super()._need_cancel_request() or (self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning'] and request.session.debug)
 
     def button_request_cancel(self):
         # EXTEND 'account'
         if self._need_cancel_request() and self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']:
             return {
-                "name": _("Invoice Cancellation"),
+                "name": _("Technical Annulment"),
                 "type": "ir.actions.act_window",
                 "view_type": "form",
                 "view_mode": "form",

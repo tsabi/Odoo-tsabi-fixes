@@ -8,7 +8,7 @@ import time
 
 class L10nHuEdiCancellation(models.TransientModel):
     _name = 'l10n_hu_edi.cancellation'
-    _description = 'Invoice Cancellation Wizard'
+    _description = 'Technical Annulment Wizard'
 
     invoice_id = fields.Many2one(
         comodel_name='account.move',
@@ -16,15 +16,15 @@ class L10nHuEdiCancellation(models.TransientModel):
     )
     code = fields.Selection(
         selection=[
-            ('ERRATIC_DATA', 'Erroneous data'),
-            ('ERRATIC_INVOICE_NUMBER', 'Erroneous invoice number'),
-            ('ERRATIC_INVOICE_ISSUE_DATE', 'Erroneous issue date'),
+            ('ERRATIC_DATA', 'ERRATIC_DATA - Erroneous data'),
+            ('ERRATIC_INVOICE_NUMBER', 'ERRATIC_INVOICE_NUMBER - Erroneous invoice number'),
+            ('ERRATIC_INVOICE_ISSUE_DATE', 'ERRATIC_INVOICE_ISSUE_DATE - Erroneous issue date'),
         ],
-        string='Cancellation code',
+        string='Annulment Code',
         required=True,
     )
     reason = fields.Char(
-        string='Cancellation Reason',
+        string='Annulment Reason',
         required=True,
     )
 
