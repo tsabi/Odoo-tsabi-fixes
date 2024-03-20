@@ -956,20 +956,21 @@ class AccountMove(models.Model):
                 'lineDescription': line.name.replace('\n', ' '),
             }
 
-            # Advance invoices case 1: this is an advance invoice
-            with contextlib.suppress(AttributeError):
-                if line.is_downpayment:
+            if 'is_downpayment' in line and line.is_downpayment:
+                advance_invoices = line._get_downpayment_lines().mapped('move_id').filtered(lambda m: m.state == 'posted') - self
+
+                # Advance invoices case 1: this is an advance invoice
+                if not advance_invoices:
                     line_values['advanceIndicator'] = True
 
-            # Advance invoices case 2: this is a final invoice that deducts an advance invoice
-            advance_invoices = line._get_downpayment_lines().mapped('move_id').filtered(lambda m: m.state == 'posted')
-            if advance_invoices:
-                line_values.update({
-                    'advanceIndicator': True,
-                    'advanceOriginalInvoice': advance_invoices[0].name,
-                    'advancePaymentDate': advance_invoices[0].invoice_date,
-                    'advanceExchangeRate': advance_invoices[0]._l10n_hu_get_currency_rate(),
-                })
+                # Advance invoices case 2: this is a final invoice that deducts an advance invoice
+                else:
+                    line_values.update({
+                        'advanceIndicator': True,
+                        'advanceOriginalInvoice': advance_invoices[0].name,
+                        'advancePaymentDate': advance_invoices[0].invoice_date,
+                        'advanceExchangeRate': advance_invoices[0]._l10n_hu_get_currency_rate(),
+                    })
 
             if line.display_type == 'product':
                 vat_tax = line.tax_ids.filtered(lambda t: t.l10n_hu_tax_type)

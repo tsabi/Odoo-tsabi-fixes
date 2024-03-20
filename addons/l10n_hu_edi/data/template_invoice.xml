@@ -162,8 +162,8 @@
             <advanceIndicator>true</advanceIndicator>
             <advancePaymentData t-if="line_values.get('advanceOriginalInvoice')">
                 <advanceOriginalInvoice t-out="line_values.get('advanceOriginalInvoice')"/>
-                <advancePaymentDate t-out="line_values.get('advanceOriginalInvoice')"/>
-                <advanceExchangeRate t-out="float_repr(line_values.get('advanceOriginalInvoice'), 6)"/>
+                <advancePaymentDate t-out="line_values.get('advancePaymentDate')"/>
+                <advanceExchangeRate t-out="float_repr(line_values.get('advanceExchangeRate'), 6)"/>
             </advancePaymentData>
         </advanceData>
         <productCodes t-if="line.product_id.l10n_hu_product_code_type or line.product_id.default_code">

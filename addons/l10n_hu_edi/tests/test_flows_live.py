@@ -52,6 +52,20 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             cancel_wizard.button_request_cancel()
             self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending'}])
 
+    def test_send_advance_final_invoice(self):
+        advance_invoice, final_invoice = self.create_advance_invoice()
+        with self.set_invoice_name(advance_invoice, 'INV/2024/'):
+            advance_invoice.action_post()
+            send_and_print = self.create_send_and_print(advance_invoice, l10n_hu_edi_enable_nav_30=True)
+            send_and_print.action_send_and_print()
+            self.assertRecordValues(advance_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
+        with self.set_invoice_name(final_invoice, 'INV/2024/'):
+            final_invoice.action_post()
+            send_and_print = self.create_send_and_print(final_invoice, l10n_hu_edi_enable_nav_30=True)
+            send_and_print.action_send_and_print()
+            self.assertRecordValues(final_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+
     def test_send_invoice_complex_huf(self):
         invoice = self.create_invoice_complex_huf()
         with self.set_invoice_name(invoice, 'INV/2024/'):

@@ -153,6 +153,51 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
             ]
         })
 
+    def create_advance_invoice(self):
+        """ Create a sale order, an advance invoice and a final invoice. """
+        self.product_a.invoice_policy = 'order'
+        pricelist_huf = self.env['product.pricelist'].create({
+            'name': 'HUF pricelist',
+            'currency_id': self.company_data['company'].currency_id.id,
+            'company_id': False,
+        })
+        sale_order = self.env['sale.order'].with_context(tracking_disable=True).create({
+            'partner_id': self.partner_company.id,
+            'pricelist_id': pricelist_huf.id,
+            'order_line': [
+                Command.create({
+                    'product_id': self.product_a.id,
+                    'product_uom_qty': 1,
+                    'price_unit': 10000.0,
+                    'tax_id': [Command.set(self.tax_vat.ids)],
+                })
+            ]
+        })
+        sale_order.action_confirm()
+
+        context = {
+            'active_model': 'sale.order',
+            'active_ids': [sale_order.id],
+            'active_id': sale_order.id,
+            'default_journal_id': self.company_data['default_journal_sale'].id,
+        }
+
+        downpayment_1 = self.env['sale.advance.payment.inv'].with_context(context).create({
+            'advance_payment_method': 'fixed',
+            'fixed_amount': 6350.0,
+            'deposit_account_id': self.company_data['default_account_revenue'].id,
+        })
+        downpayment_1.create_invoices()
+        advance_invoice = sale_order.invoice_ids
+
+        downpayment_2 = self.env['sale.advance.payment.inv'].with_context(context).create({
+            'advance_payment_method': 'delivered',
+        })
+        downpayment_2.create_invoices()
+        final_invoice = sale_order.invoice_ids - advance_invoice
+
+        return advance_invoice, final_invoice
+
     def create_invoice_complex_huf(self):
         """ Create a complex invoice in HUF, with cash rounding. """
         return self.env['account.move'].create({
