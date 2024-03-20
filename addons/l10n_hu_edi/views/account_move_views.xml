@@ -27,10 +27,10 @@
 
             <xpath expr="//sheet" position="before">
                 <div class="alert alert-warning mb-0" role="alert"
-                     invisible="l10n_hu_edi_messages and l10n_hu_edi_messages.get('blocking_level') != 'error_but_continue'">
+                     invisible="not l10n_hu_edi_messages or l10n_hu_edi_messages.get('blocking_level') != 'error_but_continue'">
                     <field name="l10n_hu_edi_messages" invisible="1"/>
                     <field name="l10n_hu_edi_message_html" readonly="1"/>
-            </div>
+                </div>
             </xpath>
 
             <xpath expr="//field[@name='id']" position="before">
