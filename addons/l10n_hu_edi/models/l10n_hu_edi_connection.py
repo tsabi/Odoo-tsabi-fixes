@@ -28,15 +28,11 @@ def format_timestamp(value):
 
 class L10nHuEdiConnectionError(Exception):
     def __init__(self, errors, code=None):
-        super().__init__()
         if not isinstance(errors, list):
             errors = [errors]
         self.errors = errors
         self.code = code
-
-    def __str__(self):
-        return '\n'.join(self.errors)
-
+        super().__init__('\n'.join(errors))
 
 class L10nHuEdiConnection(models.AbstractModel):
     _name = 'l10n_hu_edi.connection'
