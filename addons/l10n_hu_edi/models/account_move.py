@@ -490,7 +490,7 @@ class AccountMove(models.Model):
         ]
 
         try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id._l10n_hu_edi_get_credentials_dict())
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_state': 'rejected',
@@ -505,7 +505,7 @@ class AccountMove(models.Model):
 
         try:
             transaction_code = self.env['l10n_hu_edi.connection']._do_manage_invoice(
-                self.company_id._l10n_hu_edi_get_credentials_dict(),
+                self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 invoice_operations,
             )
@@ -557,7 +557,7 @@ class AccountMove(models.Model):
         self._l10n_hu_edi_check_action('query_status')
         try:
             results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
-                self.company_id._l10n_hu_edi_get_credentials_dict(),
+                self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 self[0].l10n_hu_edi_transaction_code,
             )
         except L10nHuEdiConnectionError as e:
@@ -730,7 +730,7 @@ class AccountMove(models.Model):
         while page <= available_pages:
             try:
                 transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(
-                    self.company_id._l10n_hu_edi_get_credentials_dict(),
+                    self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                     datetime_from,
                     datetime_to,
                     page
@@ -754,7 +754,7 @@ class AccountMove(models.Model):
             for transaction_code in transaction_codes_to_query:
                 try:
                     results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
-                        self.company_id._l10n_hu_edi_get_credentials_dict(),
+                        self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                         transaction_code,
                         return_original_request=True,
                     )
@@ -832,7 +832,7 @@ class AccountMove(models.Model):
         ]
 
         try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id._l10n_hu_edi_get_credentials_dict())
+            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_messages': {
@@ -846,7 +846,7 @@ class AccountMove(models.Model):
 
         try:
             transaction_code = self.env['l10n_hu_edi.connection']._do_manage_annulment(
-                self.company_id._l10n_hu_edi_get_credentials_dict(),
+                self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 annulment_operations,
             )

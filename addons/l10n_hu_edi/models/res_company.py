@@ -33,15 +33,19 @@ class ResCompany(models.Model):
     )
     l10n_hu_edi_username = fields.Char(
         string='Username',
+        groups='base.group_system',
     )
     l10n_hu_edi_password = fields.Char(
         string='Password',
+        groups='base.group_system',
     )
     l10n_hu_edi_signature_key = fields.Char(
         string='Signature Key',
+        groups='base.group_system',
     )
     l10n_hu_edi_replacement_key = fields.Char(
         string='Replacement Key',
+        groups='base.group_system',
     )
 
     def _l10n_hu_edi_configure_company(self):
