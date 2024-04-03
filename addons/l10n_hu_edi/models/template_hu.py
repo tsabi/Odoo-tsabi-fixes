@@ -16,7 +16,5 @@ class AccountChartTemplate(models.AbstractModel):
     def _get_hu_account_tax(self):
         data = self._parse_csv('hu', 'account.tax', module='l10n_hu_edi')
         for vals in data.values():
-            vals.update({
-                'l10n_hu_tax_reason': _DEFAULT_TAX_REASONS.get(vals['l10n_hu_tax_type'], False)
-            })
+            vals['l10n_hu_tax_reason'] = _DEFAULT_TAX_REASONS.get(vals['l10n_hu_tax_type'], False)
         return data

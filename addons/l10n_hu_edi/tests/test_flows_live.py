@@ -132,6 +132,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
     @contextlib.contextmanager
     def patch_call_nav_endpoint(self, endpoint, make_request=True):
         """ Patch _call_nav_endpoint in l10n_hu_edi.connection, so that a Timeout is raised on the specified endpoint.
+
         :param endpoint: the endpoint for which to raise a Timeout
         :param make_request bool: If true, will still make the request before raising the timeout.
         """

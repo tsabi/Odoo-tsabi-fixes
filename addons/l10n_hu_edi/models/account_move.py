@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import fields, models, api, _
@@ -201,8 +200,7 @@ class AccountMove(models.Model):
     # === Helpers === #
 
     def _l10n_hu_edi_get_valid_actions(self):
-        """ If any NAV 3.0 flows are applicable to the given invoice, return them, else None.
-        """
+        """ If any NAV 3.0 flows are applicable to the given invoice, return them, else None. """
         self.ensure_one()
         valid_actions = []
         if (

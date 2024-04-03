@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import models, api, _, release
+from odoo import _, release
 from odoo.tools import cleanup_xml_node
 
-from cryptography.hazmat.primitives import hashes, padding
+from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
+import hashlib
 from base64 import b64decode, b64encode
 from datetime import datetime, timedelta, timezone
 import dateutil.parser
@@ -330,14 +329,10 @@ class L10nHuEdiConnection:
         }
 
     def _calculate_password_hash(self, password):
-        digest = hashes.Hash(hashes.SHA512())
-        digest.update(password.encode())
-        return digest.finalize().hex().upper()
+        return hashlib.sha512(password.encode()).hexdigest().upper()
 
     def _calculate_invoice_hash(self, value):
-        digest = hashes.Hash(hashes.SHA3_512())
-        digest.update(value.encode())
-        return digest.finalize().hex().upper()
+        return hashlib.sha3_512(value.encode()).hexdigest().upper()
 
     def _calculate_request_signature(self, key_sign, reqid, reqdate, invoice_hashs=None):
         strings = [reqid, reqdate.strftime('%Y%m%d%H%M%S'), key_sign]

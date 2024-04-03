@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import tools
@@ -187,6 +186,7 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
     @contextlib.contextmanager
     def patch_post(self, responses=None):
         """ Patch requests.Session in l10n_hu_edi.connection.
+
         :param responses: If specified, a dict {service: response} that gives, for any service,
                           bytes that should be served as response data, or an Exception that should be raised.
                           Otherwise, will use the default responses stored under

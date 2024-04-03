@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import models, fields, _
@@ -207,7 +206,7 @@ class ResCompany(models.Model):
                                 and not (
                                     processing_result['technical_validation_messages']
                                     or any(
-                                        message['validation_error_code'] in ['INVOICE_NUMBER_NOT_UNIQUE','ANNULMENT_IN_PROGRESS']
+                                        message['validation_error_code'] in ['INVOICE_NUMBER_NOT_UNIQUE', 'ANNULMENT_IN_PROGRESS']
                                         for message in processing_result['business_validation_messages']
                                     )
                                 )

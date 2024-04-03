@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import api, models, fields, _
 from odoo.exceptions import UserError
 
 import base64
-import tempfile
+import io
 import zipfile
 import contextlib
 
@@ -61,7 +60,7 @@ class L10nHuEdiTaxAuditExport(models.TransientModel):
         if not invoices:
             raise UserError(_('No invoice to export!'))
 
-        with tempfile.NamedTemporaryFile(mode='w+b', delete=True) as buf:
+        with io.BytesIO() as buf:
             with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED, allowZip64=False) as zf:
                 # To correctly generate the XML for invoices created before l10n_hu_edi was installed,
                 # we need to temporarily set the chain index and line numbers, so we do this in a savepoint.
@@ -78,8 +77,7 @@ class L10nHuEdiTaxAuditExport(models.TransientModel):
 
                         filename = f'{invoice.name.replace("/", "_")}.xml'
                         zf.writestr(filename, invoice_xml)
-            buf.seek(0)
-            self.export_file = base64.b64encode(buf.read())
+            self.export_file = base64.b64encode(buf.getvalue())
 
         return {
             'type': 'ir.actions.act_window',
