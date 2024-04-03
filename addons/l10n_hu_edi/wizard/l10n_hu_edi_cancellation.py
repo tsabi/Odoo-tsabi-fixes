@@ -3,6 +3,7 @@
 
 from odoo import models, fields
 from odoo.exceptions import UserError
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnection
 
 import time
 
@@ -30,14 +31,18 @@ class L10nHuEdiCancellation(models.TransientModel):
     )
 
     def button_request_cancel(self):
-        self.invoice_id._l10n_hu_edi_request_cancel(self.code, self.reason)
+        with L10nHuEdiConnection(self.env) as connection:
+            self.invoice_id._l10n_hu_edi_request_cancel(connection, self.code, self.reason)
 
-        if 'query_status' in self.invoice_id._l10n_hu_edi_get_valid_actions():
-            time.sleep(2)
-            self.invoice_id._l10n_hu_edi_query_status()
+            if 'query_status' in self.invoice_id._l10n_hu_edi_get_valid_actions():
+                time.sleep(2)
+                self.invoice_id._l10n_hu_edi_query_status(connection)
 
         formatted_message = self.env['account.move.send']._format_error_html(self.invoice_id.l10n_hu_edi_messages)
         self.invoice_id.with_context(no_new_invoice=True).message_post(body=formatted_message)
+
+        if self.env['account.move.send']._can_commit():
+            self.env.cr.commit()
 
         if self.invoice_id.l10n_hu_edi_messages.get('blocking_level') == 'error':
             raise UserError(self.env['account.move.send']._format_error_text(self.invoice_id.l10n_hu_edi_messages))

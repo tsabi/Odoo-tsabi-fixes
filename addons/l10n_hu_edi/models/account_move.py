@@ -6,7 +6,7 @@ from odoo.http import request
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, groupby
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
-from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnectionError
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnection, L10nHuEdiConnectionError
 from odoo.addons.l10n_hu_edi.models.res_company import L10N_HU_EDI_SERVER_MODE_SELECTION
 
 import base64
@@ -167,35 +167,36 @@ class AccountMove(models.Model):
 
     def l10n_hu_edi_button_update_status(self, from_cron=False):
         """ Attempt to update the status of the invoices in `self` """
-        # Attempt to recover any missing transactions.
-        error = self.company_id._l10n_hu_edi_recover_transactions()
-
-        if error:
-            error_text = self.env['account.move.send']._format_error_text(error)
-            if not from_cron:
-                raise UserError(error_text)
-            else:
-                _logger.error(error_text)
-
         invoices_to_query = self.filtered(lambda m: 'query_status' in m._l10n_hu_edi_get_valid_actions())
-        with invoices_to_query._l10n_hu_edi_acquire_lock():
+        invoices_to_query._l10n_hu_edi_acquire_lock()
+
+        with L10nHuEdiConnection(self.env) as connection:
             # Call `query_status` on the invoices.
-            invoices_to_query._l10n_hu_edi_query_status()
+            invoices_to_query._l10n_hu_edi_query_status(connection)
 
-            # Error handling.
-            for invoice in invoices_to_query:
-                # Log invoice status in chatter.
-                formatted_message = self.env['account.move.send']._format_error_html(invoice.l10n_hu_edi_messages)
-                invoice.with_context(no_new_invoice=True).message_post(body=formatted_message)
+            # Attempt to recover any missing transactions.
+            recover_transactions_error = self.company_id._l10n_hu_edi_recover_transactions(connection)
 
-            for invoice in invoices_to_query:
-                # If blocking errors, raise UserError.
+        # Error handling.
+        for invoice in invoices_to_query:
+            # Log invoice status in chatter.
+            formatted_message = self.env['account.move.send']._format_error_html(invoice.l10n_hu_edi_messages)
+            invoice.with_context(no_new_invoice=True).message_post(body=formatted_message)
+
+        if self.env['account.move.send']._can_commit():
+            self.env.cr.commit()
+
+        # If blocking errors, raise UserError, or log if we are in a cron.
+        for invoice in invoices_to_query:
+            if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error' or recover_transactions_error:
                 if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error':
                     error_text = self.env['account.move.send']._format_error_text(invoice.l10n_hu_edi_messages)
-                    if not from_cron:
-                        raise UserError(error_text)
-                    else:
-                        _logger.error(error_text)
+                else:
+                    error_text = self.env['account.move.send']._format_error_text(recover_transactions_error)
+                if not from_cron:
+                    raise UserError(error_text)
+                else:
+                    _logger.error(error_text)
 
     # === Helpers === #
 
@@ -280,7 +281,7 @@ class AccountMove(models.Model):
             next_line_number = 1
         else:
             # Lock base invoice to prevent concurrent updates, ensuring sequence integrity.
-            base_invoice._l10n_hu_edi_acquire_lock(commit=False)
+            base_invoice._l10n_hu_edi_acquire_lock()
 
             prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices()
             if not self.l10n_hu_invoice_chain_index:
@@ -299,10 +300,8 @@ class AccountMove(models.Model):
             line.l10n_hu_line_number = line_number
 
     @contextlib.contextmanager
-    def _l10n_hu_edi_acquire_lock(self, commit=True):
-        """ Acquire a write lock on the invoices in self.
-        :param commit bool: On exit, commit to DB.
-        """
+    def _l10n_hu_edi_acquire_lock(self):
+        """ Acquire a write lock on the invoices in self. On exit, commit to DB. """
         if not self:
             yield
             return
@@ -312,7 +311,7 @@ class AccountMove(models.Model):
         except LockNotAvailable as e:
             raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?')) from e
         yield
-        if self.env['account.move.send']._can_commit() and commit:
+        if self.env['account.move.send']._can_commit():
             self.env.cr.commit()
 
     # === EDI: Flow === #
@@ -442,7 +441,7 @@ class AccountMove(models.Model):
 
         return errors
 
-    def _l10n_hu_edi_upload(self):
+    def _l10n_hu_edi_upload(self, connection):
         """ Generate invoice XMLs and send to NAV. """
         self._l10n_hu_edi_check_action('upload')
 
@@ -479,10 +478,24 @@ class AccountMove(models.Model):
             # Batch by company, with max 100 invoices per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
                 for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
-                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch()
+                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch(connection)
 
-    def _l10n_hu_edi_upload_single_batch(self):
+    def _l10n_hu_edi_upload_single_batch(self, connection):
         self._l10n_hu_edi_check_action('upload')
+
+        try:
+            token_result = connection.do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
+        except L10nHuEdiConnectionError as e:
+            return self.write({
+                'l10n_hu_edi_state': 'rejected',
+                'l10n_hu_edi_transaction_code': False,
+                'l10n_hu_edi_messages': {
+                    'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
+                    'errors': e.errors,
+                    'blocking_level': 'error',
+                },
+            })
+
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
 
@@ -503,23 +516,10 @@ class AccountMove(models.Model):
             for invoice in self
         ]
 
-        try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
-        except L10nHuEdiConnectionError as e:
-            return self.write({
-                'l10n_hu_edi_state': 'rejected',
-                'l10n_hu_edi_transaction_code': False,
-                'l10n_hu_edi_messages': {
-                    'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
-                    'errors': e.errors,
-                    'blocking_level': 'error',
-                },
-            })
-
         self.write({'l10n_hu_edi_send_time': fields.Datetime.now()})
 
         try:
-            transaction_code = self.env['l10n_hu_edi.connection']._do_manage_invoice(
+            transaction_code = connection.do_manage_invoice(
                 self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 invoice_operations,
@@ -554,7 +554,7 @@ class AccountMove(models.Model):
             }
         })
 
-    def _l10n_hu_edi_query_status(self):
+    def _l10n_hu_edi_query_status(self, connection):
         """ Check the NAV invoice status. """
         # We should update all invoices with the same company and transaction code at once.
         self |= self.search([
@@ -567,13 +567,13 @@ class AccountMove(models.Model):
         with self._l10n_hu_edi_acquire_lock():
             # Querying status should be grouped by company and transaction code
             for __, invoices in groupby(self, lambda m: (m.company_id, m.l10n_hu_edi_transaction_code)):
-                self.env['account.move'].browse([m.id for m in invoices])._l10n_hu_edi_query_status_single_batch()
+                self.env['account.move'].browse([m.id for m in invoices])._l10n_hu_edi_query_status_single_batch(connection)
 
-    def _l10n_hu_edi_query_status_single_batch(self):
+    def _l10n_hu_edi_query_status_single_batch(self, connection):
         """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
         self._l10n_hu_edi_check_action('query_status')
         try:
-            results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+            results = connection.do_query_transaction_status(
                 self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 self[0].l10n_hu_edi_transaction_code,
             )
@@ -717,16 +717,16 @@ class AccountMove(models.Model):
                     },
                 })
 
-    def _l10n_hu_edi_request_cancel(self, code, reason):
+    def _l10n_hu_edi_request_cancel(self, connection, code, reason):
         """ Send a cancellation request for all invoices in `self`. """
         self._l10n_hu_edi_check_action('request_cancel')
         with self._l10n_hu_edi_acquire_lock():
             # Batch by company, with max 100 annulment requests per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
                 for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
-                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(code, reason)
+                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(connection, code, reason)
 
-    def _l10n_hu_edi_request_cancel_single_batch(self, code, reason):
+    def _l10n_hu_edi_request_cancel_single_batch(self, connection, code, reason):
         self._l10n_hu_edi_check_action('request_cancel')
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
@@ -742,7 +742,7 @@ class AccountMove(models.Model):
         ]
 
         try:
-            token_result = self.env['l10n_hu_edi.connection']._do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
+            token_result = connection.do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_messages': {
@@ -755,7 +755,7 @@ class AccountMove(models.Model):
         self.write({'l10n_hu_edi_send_time': fields.Datetime.now()})
 
         try:
-            transaction_code = self.env['l10n_hu_edi.connection']._do_manage_annulment(
+            transaction_code = connection.do_manage_annulment(
                 self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
                 token_result['token'],
                 annulment_operations,

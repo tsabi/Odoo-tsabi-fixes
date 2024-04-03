@@ -3,7 +3,7 @@
 
 from odoo import models, fields, _
 from odoo.exceptions import UserError
-from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnectionError, XML_NAMESPACES
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnection, L10nHuEdiConnectionError, XML_NAMESPACES
 
 from lxml import etree
 import base64
@@ -93,17 +93,18 @@ class ResCompany(models.Model):
         return credentials_dict
 
     def _l10n_hu_edi_test_credentials(self):
-        for company in self:
-            if not company.vat:
-                raise UserError(_('NAV Credentials: Please set the hungarian vat number on the company first!'))
-            try:
-                self.env['l10n_hu_edi.connection']._do_token_exchange(company._l10n_hu_edi_get_credentials_dict())
-            except L10nHuEdiConnectionError as e:
-                raise UserError(
-                    _('Incorrect NAV Credentials! Check that your company VAT number is set correctly. \nError details: %s', e)
-                ) from e
+        with L10nHuEdiConnection(self.env) as connection:
+            for company in self:
+                if not company.vat:
+                    raise UserError(_('NAV Credentials: Please set the hungarian vat number on the company first!'))
+                try:
+                    connection.do_token_exchange(company._l10n_hu_edi_get_credentials_dict())
+                except L10nHuEdiConnectionError as e:
+                    raise UserError(
+                        _('Incorrect NAV Credentials! Check that your company VAT number is set correctly. \nError details: %s', e)
+                    ) from e
 
-    def _l10n_hu_edi_recover_transactions(self):
+    def _l10n_hu_edi_recover_transactions(self, connection):
         """ Recover transactions that are in force but for some reason are not matched to the company's
         invoices, and update the invoice state correspondingly.
 
@@ -140,7 +141,7 @@ class ResCompany(models.Model):
                 transactions = []
                 while page <= available_pages:
                     try:
-                        transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(
+                        transaction_list = connection.do_query_transaction_list(
                             company.sudo()._l10n_hu_edi_get_credentials_dict(),
                             recovery_start_time,
                             recovery_end_time,
@@ -167,7 +168,7 @@ class ResCompany(models.Model):
 
                 for transaction in transactions_to_query[0:10]:
                     try:
-                        results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
+                        results = connection.do_query_transaction_status(
                             company.sudo()._l10n_hu_edi_get_credentials_dict(),
                             transaction['transaction_code'],
                             return_original_request=True,

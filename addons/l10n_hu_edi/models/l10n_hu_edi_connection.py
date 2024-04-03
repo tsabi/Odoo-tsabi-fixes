@@ -34,6 +34,18 @@ def format_bool(value):
 def format_timestamp(value):
     return value.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
+def decrypt_aes128(key, encrypted_token):
+    """ Decrypt AES-128-ECB encrypted bytes.
+    :param key bytes: the 128-bit key
+    :param encrypted_token bytes: the bytes to decrypt
+    :return: the decrypted bytes
+    """
+    decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
+    decrypted_token = decryptor.update(encrypted_token) + decryptor.finalize()
+    unpadder = padding.PKCS7(128).unpadder()
+    unpadded_token = unpadder.update(decrypted_token) + unpadder.finalize()
+    return unpadded_token
+
 class L10nHuEdiConnectionError(Exception):
     def __init__(self, errors, code=None):
         if not isinstance(errors, list):
@@ -42,31 +54,38 @@ class L10nHuEdiConnectionError(Exception):
         self.code = code
         super().__init__('\n'.join(errors))
 
-class L10nHuEdiConnection(models.AbstractModel):
-    _name = 'l10n_hu_edi.connection'
-    _description = 'Methods to call NAV API endpoints'
+class L10nHuEdiConnection:
+    def __init__(self, env):
+        """ Methods to call NAV API endpoints.
+        Use this as a context manager (`with L10nHuEdiConnection(...) as connection`)
+        to ensure the TCP connection is closed when you are finished calling endpoints.
 
-    # === API-calling methods === #
+        :param env: the Odoo environment
+        """
+        self.env = env
+        self.session = requests.Session()
 
-    @api.model
-    def _do_token_exchange(self, credentials):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.session.close()
+
+    def do_token_exchange(self, credentials):
         """ Request a token for invoice submission.
-        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+
+        :param credentials: a dictionary
+            {
+                'vat': str,
+                'mode': 'production' || 'test',
+                'username': str,
+                'password': str,
+                'signature_key': str,
+                'replacement_key': str
+            }
         :return: a dictionary {'token': str, 'token_validity_to': datetime}
         :raise: L10nHuEdiConnectionError
         """
-        def decrypt_aes128(key, encrypted_token):
-            """ Decrypt AES-128 encrypted bytes.
-            :param key bytes: the 128-bit key
-            :param encrypted_token bytes: the bytes to decrypt
-            :return: the decrypted bytes
-            """
-            decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
-            decrypted_token = decryptor.update(encrypted_token) + decryptor.finalize()
-            unpadder = padding.PKCS7(128).unpadder()
-            unpadded_token = unpadder.update(decrypted_token) + unpadder.finalize()
-            return unpadded_token
-
         template_values = self._get_header_values(credentials)
         request_data = self.env['ir.qweb']._render('l10n_hu_edi.token_exchange_request', template_values)
         request_data = etree.tostring(cleanup_xml_node(request_data, remove_blank_nodes=False), xml_declaration=True, encoding='UTF-8')
@@ -93,11 +112,10 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         return {'token': token, 'token_validity_to': token_validity_to}
 
-    @api.model
-    def _do_manage_invoice(self, credentials, token, invoice_operations):
+    def do_manage_invoice(self, credentials, token, invoice_operations):
         """ Submit one or more invoices.
-        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
-        :param token: a token obtained via `_do_token_exchange`
+
+        :param token: a token obtained via `do_token_exchange`
         :param invoice_operations: a list of dictionaries:
             {
                 'index': <index given to invoice>,
@@ -136,10 +154,9 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         return transaction_code
 
-    @api.model
-    def _do_query_transaction_status(self, credentials, transaction_code, return_original_request=False):
+    def do_query_transaction_status(self, credentials, transaction_code, return_original_request=False):
         """ Query the status of a transaction.
-        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+
         :param transaction_code: the code of the transaction to query
         :param return_original_request: whether to request the submitted invoice XML.
         :return: a list of dicts {'index': str, 'invoice_status': str, 'business_validation_messages', 'technical_validation_messages'}
@@ -197,10 +214,9 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         return results
 
-    @api.model
-    def _do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
+    def do_query_transaction_list(self, credentials, datetime_from, datetime_to, page=1):
         """ Query the transactions that were submitted in a given time interval.
-        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
+
         :param datetime_from: start of the time interval to query
         :param datetime_to: end of the time interval to query
         :return: a dict {'transaction_codes': list[str], 'available_pages': int}
@@ -241,11 +257,10 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         return {"transactions": transactions, "available_pages": available_pages}
 
-    @api.model
-    def _do_manage_annulment(self, credentials, token, annulment_operations):
+    def do_manage_annulment(self, credentials, token, annulment_operations):
         """ Request technical annulment of one or more invoices.
-        :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
-        :param token: a token obtained via `_do_token_exchange`
+
+        :param token: a token obtained via `do_token_exchange`
         :param annulment_operations: a list of dictionaries:
             {
                 'index': <index given to invoice>,
@@ -355,13 +370,10 @@ class L10nHuEdiConnection(models.AbstractModel):
             _logger.warning('REQUEST: POST: %s==>headers:%s\ndata:%s', str(url), str(headers), str(data))
 
         try:
-            response_object = requests.post(url, data=data, headers=headers, timeout=timeout)
+            response_object = self.session.post(url, data=data, headers=headers, timeout=timeout)
+        except requests.Timeout as e:
+            raise L10nHuEdiConnectionError(_('Connection to NAV servers timed out.'), code='timeout') from e
         except requests.RequestException as e:
-            if isinstance(e, requests.Timeout):
-                raise L10nHuEdiConnectionError(
-                    _('Connection to NAV servers timed out.'),
-                    code='timeout',
-                ) from e
             raise L10nHuEdiConnectionError(str(e)) from e
 
         if self.env.context.get('nav_comm_debug'):

@@ -3,7 +3,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import tagged
 from odoo.addons.account.tests.test_account_move_send import TestAccountMoveSendCommon
 from odoo.addons.l10n_hu_edi.tests.common import L10nHuEdiTestCommon
-from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnectionError
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnection, L10nHuEdiConnectionError
 
 from unittest import skipIf, mock
 import contextlib
@@ -131,11 +131,11 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
 
     @contextlib.contextmanager
     def patch_call_nav_endpoint(self, endpoint, make_request=True):
-        """ Patch requests.post in l10n_hu_edi.connection, so that a Timeout is raised on the specified endpoint.
+        """ Patch _call_nav_endpoint in l10n_hu_edi.connection, so that a Timeout is raised on the specified endpoint.
         :param endpoint: the endpoint for which to raise a Timeout
         :param make_request bool: If true, will still make the request before raising the timeout.
         """
-        real_call_nav_endpoint = type(self.env['l10n_hu_edi.connection'])._call_nav_endpoint
+        real_call_nav_endpoint = L10nHuEdiConnection._call_nav_endpoint
         def mock_call_nav_endpoint(self, mode, service, data, timeout=20):
             if service == endpoint:
                 if make_request:
@@ -144,5 +144,5 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             else:
                 return real_call_nav_endpoint(self, mode, service, data, timeout=timeout)
 
-        with mock.patch.object(type(self.env['l10n_hu_edi.connection']), '_call_nav_endpoint', new=mock_call_nav_endpoint):
+        with mock.patch.object(L10nHuEdiConnection, '_call_nav_endpoint', new=mock_call_nav_endpoint):
             yield
