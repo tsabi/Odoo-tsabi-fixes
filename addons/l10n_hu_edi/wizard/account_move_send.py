@@ -61,20 +61,6 @@ class AccountMoveSend(models.TransientModel):
             return invoice._l10n_hu_edi_get_valid_actions()
 
     @api.model
-    def _hook_invoice_document_before_pdf_report_render(self, invoice, invoice_data):
-        # EXTENDS 'account'
-        super()._hook_invoice_document_before_pdf_report_render(invoice, invoice_data)
-        if (
-            invoice_data.get('l10n_hu_edi_checkbox_nav_30')
-            and 'upload' in invoice._l10n_hu_edi_get_valid_actions()
-            and (errors := invoice._l10n_hu_edi_check_invoices())
-        ):
-            invoice_data['error'] = {
-                'error_title': _('Errors occurred while sending the invoice to NAV:'),
-                'errors': [v['message'] for v in errors.values()],
-            }
-
-    @api.model
     def _call_web_service_before_invoice_pdf_render(self, invoices_data):
         # EXTENDS 'account'
         super()._call_web_service_before_invoice_pdf_render(invoices_data)

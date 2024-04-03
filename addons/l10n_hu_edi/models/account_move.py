@@ -255,7 +255,8 @@ class AccountMove(models.Model):
         If the company currency is HUF, we estimate this based on the invoice lines,
         using a MMSE estimator assuming random (Gaussian) rounding errors.
 
-        Otherwise, we get the rate from the currency rates.
+        If the company currency is not HUF (e.g. Hungarian companies that do their accounting in euro),
+        we get the rate from the currency rates.
         """
         if self.currency_id.name == 'HUF':
             return 1
@@ -448,6 +449,19 @@ class AccountMove(models.Model):
         self._l10n_hu_edi_check_action('upload')
 
         for invoice in self:
+            # If we come from the 'cancelled' state, this means the previous XML had been confirmed
+            # before it was cancelled.
+            # In that case, we want to keep it as a regular invoice attachment, for future reference.
+            if invoice.l10n_hu_edi_state == 'cancelled':
+                self.env['ir.attachment'].search([
+                    ('res_model', '=', self._name),
+                    ('res_id', '=', invoice.id),
+                    ('res_field', '=', 'l10n_hu_edi_attachment'),
+                ]).write({
+                    'res_field': False,
+                    'name': f'{invoice.name.replace("/", "_")}_cancelled_{invoice.l10n_hu_edi_transaction_code}.xml',
+                })
+
             invoice.write({
                 'l10n_hu_edi_server_mode': invoice.company_id.l10n_hu_edi_server_mode,
                 'l10n_hu_edi_attachment': base64.b64encode(invoice._l10n_hu_edi_generate_xml()),
@@ -455,7 +469,7 @@ class AccountMove(models.Model):
             # Set name & mimetype on newly-created attachment.
             attachment = self.env['ir.attachment'].search([
                 ('res_model', '=', self._name),
-                ('res_id', 'in', self.ids),
+                ('res_id', '=', invoice.id),
                 ('res_field', '=', 'l10n_hu_edi_attachment'),
             ])
             attachment.write({
