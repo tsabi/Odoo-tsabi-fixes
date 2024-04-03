@@ -35,19 +35,19 @@ class ResCompany(models.Model):
         string='Server Mode',
     )
     l10n_hu_edi_username = fields.Char(
-        string='Username',
+        string='NAV Username',
         groups='base.group_system',
     )
     l10n_hu_edi_password = fields.Char(
-        string='Password',
+        string='NAV Password',
         groups='base.group_system',
     )
     l10n_hu_edi_signature_key = fields.Char(
-        string='Signature Key',
+        string='NAV Signature Key',
         groups='base.group_system',
     )
     l10n_hu_edi_replacement_key = fields.Char(
-        string='Replacement Key',
+        string='NAV Replacement Key',
         groups='base.group_system',
     )
     l10n_hu_edi_last_transaction_recovery = fields.Datetime(
