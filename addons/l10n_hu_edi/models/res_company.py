@@ -3,7 +3,7 @@
 
 from odoo import models, fields, _
 from odoo.exceptions import UserError
-from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnectionError
+from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnectionError, XML_NAMESPACES
 
 from lxml import etree
 import base64
@@ -88,7 +88,7 @@ class ResCompany(models.Model):
             'signature_key': self.l10n_hu_edi_signature_key,
             'replacement_key': self.l10n_hu_edi_replacement_key,
         }
-        if any(not v for v in credentials_dict.values()):
+        if not all(credentials_dict.values()):
             raise UserError(_('Missing NAV credentials for company %s', self.name))
         return credentials_dict
 
@@ -100,10 +100,8 @@ class ResCompany(models.Model):
                 self.env['l10n_hu_edi.connection']._do_token_exchange(company._l10n_hu_edi_get_credentials_dict())
             except L10nHuEdiConnectionError as e:
                 raise UserError(
-                    _('Incorrect NAV Credentials!') + '\n'
-                    + _('Check that your company VAT number is set correctly.') + '\n\n'
-                    + str(e)
-                )
+                    _('Incorrect NAV Credentials! Check that your company VAT number is set correctly. \nError details: %s', e)
+                ) from e
 
     def _l10n_hu_edi_recover_transactions(self):
         """ Recover transactions that are in force but for some reason are not matched to the company's
@@ -181,9 +179,9 @@ class ResCompany(models.Model):
                         }
 
                     for processing_result in results['processing_results']:
-                        invoice_name = processing_result['original_xml'].findtext('{*}invoiceNumber')
+                        invoice_name = processing_result['original_xml'].findtext('data:invoiceNumber', namespaces=XML_NAMESPACES)
                         canonicalized_attachment = etree.canonicalize(processing_result['original_file'])
-                        annulment_invoice_name = processing_result['original_xml'].findtext('{*}annulmentReference')
+                        annulment_invoice_name = processing_result['original_xml'].findtext('data:annulmentReference', namespaces=XML_NAMESPACES)
 
                         matched_invoice = invoices_to_check.filtered(
                             lambda m: (

@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from base64 import b64decode, b64encode
 from datetime import datetime, timedelta, timezone
 import dateutil.parser
-import uuid
+import secrets
 import requests
 import binascii
 from lxml import etree
@@ -18,6 +18,14 @@ from lxml import etree
 import logging
 
 _logger = logging.getLogger(__name__)
+
+
+XML_NAMESPACES = {
+    'api': 'http://schemas.nav.gov.hu/OSA/3.0/api',
+    'common': 'http://schemas.nav.gov.hu/NTCA/1.0/common',
+    'base': 'http://schemas.nav.gov.hu/OSA/3.0/base',
+    'data': 'http://schemas.nav.gov.hu/OSA/3.0/data',
+}
 
 
 def format_bool(value):
@@ -66,8 +74,8 @@ class L10nHuEdiConnection(models.AbstractModel):
         response_xml = self._call_nav_endpoint(credentials['mode'], 'tokenExchange', request_data)
         self._parse_error_response(response_xml)
 
-        encrypted_token = response_xml.findtext('{*}encodedExchangeToken')
-        token_validity_to = response_xml.findtext('{*}tokenValidityTo')
+        encrypted_token = response_xml.findtext('api:encodedExchangeToken', namespaces=XML_NAMESPACES)
+        token_validity_to = response_xml.findtext('api:tokenValidityTo', namespaces=XML_NAMESPACES)
         try:
             # Convert into a naive UTC datetime, since Odoo can't store timezone-aware datetimes
             token_validity_to = dateutil.parser.isoparse(token_validity_to).astimezone(timezone.utc).replace(tzinfo=None)
@@ -80,8 +88,8 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         try:
             token = decrypt_aes128(credentials['replacement_key'].encode(), b64decode(encrypted_token.encode())).decode()
-        except ValueError:
-            raise L10nHuEdiConnectionError(_('Error during decryption of ExchangeToken.'))
+        except ValueError as e:
+            raise L10nHuEdiConnectionError(_('Error during decryption of ExchangeToken.')) from e
 
         return {'token': token, 'token_validity_to': token_validity_to}
 
@@ -122,7 +130,7 @@ class L10nHuEdiConnection(models.AbstractModel):
         response_xml = self._call_nav_endpoint(credentials['mode'], 'manageInvoice', request_data, timeout=60)
         self._parse_error_response(response_xml)
 
-        transaction_code = response_xml.findtext('{*}transactionId')
+        transaction_code = response_xml.findtext('api:transactionId', namespaces=XML_NAMESPACES)
         if not transaction_code:
             raise L10nHuEdiConnectionError(_('Invoice Upload failed: NAV did not return a Transaction ID.'))
 
@@ -150,35 +158,35 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         results = {
             'processing_results': [],
-            'annulment_status': response_xml.findtext('{*}processingResults/{*}annulmentData/{*}annulmentVerificationStatus'),
+            'annulment_status': response_xml.findtext('api:processingResults/api:annulmentData/api:annulmentVerificationStatus', namespaces=XML_NAMESPACES),
         }
-        for processing_result_xml in response_xml.findall('{*}processingResults/{*}processingResult'):
+        for processing_result_xml in response_xml.iterfind('api:processingResults/api:processingResult', namespaces=XML_NAMESPACES):
             processing_result = {
-                'index': processing_result_xml.findtext('{*}index'),
-                'invoice_status': processing_result_xml.findtext('{*}invoiceStatus'),
+                'index': processing_result_xml.findtext('api:index', namespaces=XML_NAMESPACES),
+                'invoice_status': processing_result_xml.findtext('api:invoiceStatus', namespaces=XML_NAMESPACES),
                 'business_validation_messages': [],
                 'technical_validation_messages': [],
             }
-            for message_xml in processing_result_xml.findall('{*}businessValidationMessages'):
+            for message_xml in processing_result_xml.iterfind('api:businessValidationMessages', namespaces=XML_NAMESPACES):
                 processing_result['business_validation_messages'].append({
-                    'validation_result_code': message_xml.findtext('{*}validationResultCode'),
-                    'validation_error_code': message_xml.findtext('{*}validationErrorCode'),
-                    'message': message_xml.findtext('{*}message'),
+                    'validation_result_code': message_xml.findtext('api:validationResultCode', namespaces=XML_NAMESPACES),
+                    'validation_error_code': message_xml.findtext('api:validationErrorCode', namespaces=XML_NAMESPACES),
+                    'message': message_xml.findtext('api:message', namespaces=XML_NAMESPACES),
                 })
-            for message_xml in processing_result_xml.findall('{*}technicalValidationMessages'):
+            for message_xml in processing_result_xml.iterfind('api:technicalValidationMessages', namespaces=XML_NAMESPACES):
                 processing_result['technical_validation_messages'].append({
-                    'validation_result_code': message_xml.findtext('{*}validationResultCode'),
-                    'validation_error_code': message_xml.findtext('{*}validationErrorCode'),
-                    'message': message_xml.findtext('{*}message'),
+                    'validation_result_code': message_xml.findtext('api:validationResultCode', namespaces=XML_NAMESPACES),
+                    'validation_error_code': message_xml.findtext('api:validationErrorCode', namespaces=XML_NAMESPACES),
+                    'message': message_xml.findtext('api:message', namespaces=XML_NAMESPACES),
                 })
             if return_original_request:
                 try:
-                    original_file = b64decode(processing_result_xml.findtext('{*}originalRequest'))
+                    original_file = b64decode(processing_result_xml.findtext('api:originalRequest', namespaces=XML_NAMESPACES))
                     original_xml = etree.fromstring(original_file)
                 except binascii.Error as e:
-                    raise L10nHuEdiConnectionError(str(e))
+                    raise L10nHuEdiConnectionError(str(e)) from e
                 except etree.ParserError as e:
-                    raise L10nHuEdiConnectionError(str(e))
+                    raise L10nHuEdiConnectionError(str(e)) from e
 
                 processing_result.update({
                     'original_file': original_file.decode(),
@@ -211,22 +219,25 @@ class L10nHuEdiConnection(models.AbstractModel):
         response_xml = self._call_nav_endpoint(credentials['mode'], 'queryTransactionList', request_data)
         self._parse_error_response(response_xml)
 
-        available_pages = response_xml.findtext('{*}transactionListResult/{*}availablePage')
+        available_pages = response_xml.findtext('api:transactionListResult/api:availablePage', namespaces=XML_NAMESPACES)
         try:
             available_pages = int(available_pages)
         except ValueError:
             available_pages = 1
 
-        transactions = [
-            {
-                'transaction_code': transaction_xml.findtext('{*}transactionId'),
-                'annulment': transaction_xml.findtext('{*}technicalAnnulment') == 'true',
-                'username': transaction_xml.findtext('{*}insCusUser'),
-                'source': transaction_xml.findtext('{*}source'),
-                'send_time': datetime.fromisoformat(transaction_xml.findtext('{*}insDate').replace('Z', '')),
-            }
-            for transaction_xml in response_xml.findall('{*}transactionListResult/{*}transaction')
-        ]
+        transactions = []
+        for transaction_xml in response_xml.iterfind('api:transactionListResult/api:transaction', namespaces=XML_NAMESPACES):
+            try:
+                send_time = datetime.fromisoformat(transaction_xml.findtext('api:insDate', namespaces=XML_NAMESPACES).replace('Z', ''))
+            except ValueError as e:
+                raise L10nHuEdiConnectionError(_('Could not parse time of previous transaction')) from e
+            transactions.append({
+                'transaction_code': transaction_xml.findtext('api:transactionId', namespaces=XML_NAMESPACES),
+                'annulment': transaction_xml.findtext('api:technicalAnnulment', namespaces=XML_NAMESPACES) == 'true',
+                'username': transaction_xml.findtext('api:insCusUser', namespaces=XML_NAMESPACES),
+                'source': transaction_xml.findtext('api:source', namespaces=XML_NAMESPACES),
+                'send_time': send_time,
+            })
 
         return {"transactions": transactions, "available_pages": available_pages}
 
@@ -270,7 +281,7 @@ class L10nHuEdiConnection(models.AbstractModel):
         response_xml = self._call_nav_endpoint(credentials['mode'], 'manageAnnulment', request_data, timeout=60)
         self._parse_error_response(response_xml)
 
-        transaction_code = response_xml.findtext('{*}transactionId')
+        transaction_code = response_xml.findtext('api:transactionId', namespaces=XML_NAMESPACES)
         if not transaction_code:
             raise L10nHuEdiConnectionError(_('Invoice Upload failed: NAV did not return a Transaction ID.'))
 
@@ -280,7 +291,7 @@ class L10nHuEdiConnection(models.AbstractModel):
 
     def _get_header_values(self, credentials, invoice_hashs=None):
         timestamp = datetime.utcnow()
-        request_id = ('ODOO' + str(uuid.uuid4()).replace('-', ''))[:30]
+        request_id = 'ODOO' + secrets.token_hex(13)
         request_signature = self._calculate_request_signature(credentials['signature_key'], request_id, timestamp, invoice_hashs=invoice_hashs)
         odoo_version = release.version
         module_version = self.env['ir.module.module'].get_module_info('l10n_hu_edi').get('version').replace('saas~', '').replace('.', '')
@@ -350,8 +361,8 @@ class L10nHuEdiConnection(models.AbstractModel):
                 raise L10nHuEdiConnectionError(
                     _('Connection to NAV servers timed out.'),
                     code='timeout',
-                )
-            raise L10nHuEdiConnectionError(str(e))
+                ) from e
+            raise L10nHuEdiConnectionError(str(e)) from e
 
         if self.env.context.get('nav_comm_debug'):
             _logger.warning(
@@ -363,8 +374,8 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         try:
             response_xml = etree.fromstring(response_object.text.encode())
-        except etree.ParseError:
-            raise L10nHuEdiConnectionError(_('Invalid NAV response!'))
+        except etree.ParseError as e:
+            raise L10nHuEdiConnectionError(_('Invalid NAV response!')) from e
 
         return response_xml
 
@@ -373,17 +384,17 @@ class L10nHuEdiConnection(models.AbstractModel):
     def _parse_error_response(self, response_xml):
         if response_xml.tag == '{http://schemas.nav.gov.hu/OSA/3.0/api}GeneralErrorResponse':
             errors = []
-            for message_xml in response_xml.findall('{*}technicalValidationMessages'):
-                message = message_xml.findtext('{*}message')
-                error_code = message_xml.findtext('{*}validationErrorCode')
+            for message_xml in response_xml.iterfind('api:technicalValidationMessages', namespaces=XML_NAMESPACES):
+                message = message_xml.findtext('api:message', namespaces=XML_NAMESPACES)
+                error_code = message_xml.findtext('api:validationErrorCode', namespaces=XML_NAMESPACES)
                 errors.append(f'{error_code}: {message}')
             raise L10nHuEdiConnectionError(errors)
 
         if response_xml.tag == '{http://schemas.nav.gov.hu/OSA/3.0/api}GeneralExceptionResponse':
-            message = response_xml.findtext('{*}message')
-            code = response_xml.findtext('{*}errorCode')
+            message = response_xml.findtext('api:message', namespaces=XML_NAMESPACES)
+            code = response_xml.findtext('api:errorCode', namespaces=XML_NAMESPACES)
             raise L10nHuEdiConnectionError(f'{code}: {message}')
 
-        func_code = response_xml.findtext('{*}result/{*}funcCode')
+        func_code = response_xml.findtext('common:result/common:funcCode', namespaces=XML_NAMESPACES)
         if func_code != 'OK':
             raise L10nHuEdiConnectionError(_('NAV replied with non-OK funcCode: %s', func_code))

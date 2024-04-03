@@ -15,7 +15,7 @@ from lxml import etree
 import logging
 import re
 import contextlib
-from psycopg2 import OperationalError
+from psycopg2.errors import LockNotAvailable
 
 _logger = logging.getLogger(__name__)
 
@@ -308,11 +308,9 @@ class AccountMove(models.Model):
             return
         try:
             with self.env.cr.savepoint(flush=False):
-                self.env.cr.execute('SELECT * FROM account_move WHERE id IN %s FOR UPDATE NOWAIT', [tuple(self.ids)])
-        except OperationalError as e:
-            if e.pgcode == '55P03':
-                raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?'))
-            raise
+                self.env.cr.execute('SELECT * FROM account_move WHERE id = ANY(%s) FOR UPDATE NOWAIT', [self.ids])
+        except LockNotAvailable as e:
+            raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?')) from e
         yield
         if self.env['account.move.send']._can_commit() and commit:
             self.env.cr.commit()
@@ -321,7 +319,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_check_invoices(self):
         errors = []
-        hu_vat_regex = re.compile(r'^\d{8}-[1-5]-\d{2}$')
+        hu_vat_regex = re.compile(r'\d{8}-[1-5]-\d{2}')
 
         checks = {
             'company_vat_missing': {
