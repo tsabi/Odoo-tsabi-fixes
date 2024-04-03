@@ -92,11 +92,11 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
 
         self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
-        # Set the send time 6 minutes in the past so the timeout recovery mechanism triggers.
-        invoice.l10n_hu_edi_send_time -= timedelta(minutes=6)
+        # Set the send time 7 minutes in the past so the timeout recovery mechanism triggers.
+        invoice.l10n_hu_edi_send_time -= timedelta(minutes=7)
         with contextlib.suppress(UserError):
             invoice.l10n_hu_edi_button_update_status()
-        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': False}])
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'rejected'}])
 
     def test_timeout_recovery_success(self):
         invoice = self.create_invoice_simple()
@@ -108,8 +108,8 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
 
             self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
 
-            # Set the send time 6 minutes in the past so the timeout recovery mechanism triggers.
-            invoice.l10n_hu_edi_send_time -= timedelta(minutes=6)
+            # Set the send time 7 minutes in the past so the timeout recovery mechanism triggers.
+            invoice.l10n_hu_edi_send_time -= timedelta(minutes=7)
             invoice.l10n_hu_edi_button_update_status()
             self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
 

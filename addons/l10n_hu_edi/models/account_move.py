@@ -14,7 +14,6 @@ import math
 from lxml import etree
 import logging
 import re
-from datetime import timedelta
 import contextlib
 from psycopg2 import OperationalError
 
@@ -82,10 +81,6 @@ class AccountMove(models.Model):
         selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
         string='Server Mode',
     )
-    l10n_hu_edi_show_button_update_status = fields.Char(
-        string='Technical field to show the Update Status button',
-        compute='_compute_l10n_hu_edi_show_button_update_status',
-    )
     l10n_hu_edi_attachment_filename = fields.Char(
         string='Invoice XML filename',
         compute='_compute_l10n_hu_edi_attachment_filename',
@@ -128,11 +123,6 @@ class AccountMove(models.Model):
     def _compute_l10n_hu_edi_attachment_filename(self):
         for move in self:
             move.l10n_hu_edi_attachment_filename = f'{move.name.replace("/", "_")}.xml'
-
-    @api.depends('l10n_hu_edi_state')
-    def _compute_l10n_hu_edi_show_button_update_status(self):
-        for move in self:
-            move.l10n_hu_edi_show_button_update_status = move._l10n_hu_edi_get_valid_action() in ['query_status', 'recover_timeout']
 
     # === Overrides === #
 
@@ -177,56 +167,68 @@ class AccountMove(models.Model):
 
     def l10n_hu_edi_button_update_status(self, from_cron=False):
         """ Attempt to update the status of the invoices in `self` """
-        self = self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() in ['recover_timeout', 'query_status'])
+        # Attempt to recover any missing transactions.
+        error = self.company_id._l10n_hu_edi_recover_transactions()
 
-        with self._l10n_hu_edi_acquire_lock():
-            # Attempt timeout recovery if any invoices need it.
-            self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'recover_timeout')._l10n_hu_edi_recover_timeout()
+        if error:
+            error_text = self.env['account.move.send']._format_error_text(error)
+            if not from_cron:
+                raise UserError(error_text)
+            else:
+                _logger.error(error_text)
 
+        invoices_to_query = self.filtered(lambda m: 'query_status' in m._l10n_hu_edi_get_valid_actions())
+        with invoices_to_query._l10n_hu_edi_acquire_lock():
             # Call `query_status` on the invoices.
-            self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() == 'query_status')._l10n_hu_edi_query_status()
+            invoices_to_query._l10n_hu_edi_query_status()
 
             # Error handling.
-            for invoice in self:
+            for invoice in invoices_to_query:
                 # Log invoice status in chatter.
                 formatted_message = self.env['account.move.send']._format_error_html(invoice.l10n_hu_edi_messages)
                 invoice.with_context(no_new_invoice=True).message_post(body=formatted_message)
 
-            for invoice in self:
+            for invoice in invoices_to_query:
                 # If blocking errors, raise UserError.
-                if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error' and not from_cron:
-                    raise UserError(self.env['account.move.send']._format_error_text(invoice.l10n_hu_edi_messages))
+                if invoice.l10n_hu_edi_messages.get('blocking_level') == 'error':
+                    error_text = self.env['account.move.send']._format_error_text(invoice.l10n_hu_edi_messages)
+                    if not from_cron:
+                        raise UserError(error_text)
+                    else:
+                        _logger.error(error_text)
 
     # === Helpers === #
 
-    def _l10n_hu_edi_get_valid_action(self):
-        """ If a NAV 3.0 flow is applicable to the given invoice, return it, else None.
+    def _l10n_hu_edi_get_valid_actions(self):
+        """ If any NAV 3.0 flows are applicable to the given invoice, return them, else None.
         """
         self.ensure_one()
-        states_by_action = {
-            'upload': [False, 'rejected', 'cancelled'],
-            'query_status': ['sent', 'cancel_sent', 'cancel_pending'],
-            'recover_timeout': ['send_timeout', 'cancel_timeout'],
-            'request_cancel': ['confirmed', 'confirmed_warning'],
-        }
-        for action, states in states_by_action.items():
-            if self.l10n_hu_edi_state in states:
-                break
-        else:
-            return
-
+        valid_actions = []
         if (
             self.country_code == 'HU'
             and self.is_sale_document()
             and self.state == 'posted'
-            # Only process moves that are in the same server mode (test/production) as the company (except if we are sending a new XML)
-            and (action == 'upload' or self.l10n_hu_edi_server_mode == self.company_id.l10n_hu_edi_server_mode)
         ):
-            return action
+            if self.l10n_hu_edi_state in [False, 'rejected', 'cancelled']:
+                valid_actions.append('upload')
+            # If we are updating the state of an invoice that was already sent to NAV, we should
+            # process it only if we are currently in the same server mode (test/production).
+            elif self.l10n_hu_edi_server_mode == self.company_id.l10n_hu_edi_server_mode:
+                if self.l10n_hu_edi_transaction_code:
+                    valid_actions.append('query_status')
+                if self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']:
+                    valid_actions.append('request_cancel')
+                if not valid_actions:
+                    # Placeholder to denote that the invoice was already processed with a NAV flow,
+                    # useful e.g. for account_move_send's _need_invoice_document which gets called
+                    # at various points in the flow, including after the invoice state has been changed
+                    # to a final state.
+                    valid_actions.append(True)
+        return valid_actions
 
     def _l10n_hu_edi_check_action(self, action):
         """ Raise an error if the given action cannot be performed with the invoices in self. """
-        bad_invoices = self.filtered(lambda m: m._l10n_hu_edi_get_valid_action() != action)
+        bad_invoices = self.filtered(lambda m: action not in m._l10n_hu_edi_get_valid_actions())
         if bad_invoices:
             raise UserError(_('Action %s cannot be processed for invoices %s!', action, bad_invoices.mapped('name')))
 
@@ -494,6 +496,7 @@ class AccountMove(models.Model):
         except L10nHuEdiConnectionError as e:
             return self.write({
                 'l10n_hu_edi_state': 'rejected',
+                'l10n_hu_edi_transaction_code': False,
                 'l10n_hu_edi_messages': {
                     'error_title': _('Could not authenticate with NAV. Check your credentials and try again.'),
                     'errors': e.errors,
@@ -513,14 +516,16 @@ class AccountMove(models.Model):
             if e.code == 'timeout':
                 return self.write({
                     'l10n_hu_edi_state': 'send_timeout',
+                    'l10n_hu_edi_transaction_code': False,
                     'l10n_hu_edi_messages': {
-                        'error_title': _('Invoice submission timed out. Please wait at least 6 minutes before updating status.'),
+                        'error_title': _('Invoice submission timed out. Please wait at least 6 minutes, then update the status.'),
                         'errors': e.errors,
                         'blocking_level': 'error_but_continue',
                     },
                 })
             return self.write({
                 'l10n_hu_edi_state': 'rejected',
+                'l10n_hu_edi_transaction_code': False,
                 'l10n_hu_edi_messages': {
                     'error_title': _('Invoice submission failed.'),
                     'errors': e.errors,
@@ -700,113 +705,6 @@ class AccountMove(models.Model):
                     },
                 })
 
-    def _l10n_hu_edi_recover_timeout(self):
-        """ Attempt to recover all invoices in `self` from an upload timeout """
-        # Only attempt to recover from a timeout for invoices sent more than 6 minutes ago.
-        self._l10n_hu_edi_check_action('recover_timeout')
-        self = self.filtered(lambda m: m.l10n_hu_edi_send_time <= fields.Datetime.now() - timedelta(minutes=6))
-        with self._l10n_hu_edi_acquire_lock():
-            # Group by company.
-            for __, invoices_by_company in groupby(self, lambda m: m.company_id):
-                # Further group by 7-minute time intervals (more precisely, time intervals which don't have more than 7 minutes between missing invoices)
-                time_interval_groups = []
-                for invoice in sorted(invoices_by_company, key=lambda m: m.l10n_hu_edi_send_time):
-                    if not time_interval_groups or invoice.l10n_hu_edi_send_time >= time_interval_groups[-1][-1].l10n_hu_edi_send_time + timedelta(minutes=5):
-                        time_interval_groups.append(invoice)
-                    else:
-                        time_interval_groups[-1] += invoice
-
-                for invoices in time_interval_groups:
-                    invoices._l10n_hu_edi_recover_timeout_single_batch()
-
-    def _l10n_hu_edi_recover_timeout_single_batch(self):
-        self._l10n_hu_edi_check_action('recover_timeout')
-        datetime_from = min(self.mapped('l10n_hu_edi_send_time'))
-        datetime_to = max(self.mapped('l10n_hu_edi_send_time')) + timedelta(minutes=7)
-
-        page = 1
-        available_pages = 1
-
-        while page <= available_pages:
-            try:
-                transaction_list = self.env['l10n_hu_edi.connection']._do_query_transaction_list(
-                    self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
-                    datetime_from,
-                    datetime_to,
-                    page
-                )
-            except L10nHuEdiConnectionError as e:
-                return self.write({
-                    'l10n_hu_edi_messages': {
-                        'error_title': _('Error querying active transactions while attempting timeout recovery.'),
-                        'errors': e.errors,
-                        'blocking_level': 'error_but_continue',
-                    },
-                })
-
-            transaction_codes_to_query = [
-                t['transaction_code']
-                for t in transaction_list['transactions']
-                if t['username'] == self.company_id.l10n_hu_edi_username
-                   and t['source'] == 'MGM'
-            ]
-
-            for transaction_code in transaction_codes_to_query:
-                try:
-                    results = self.env['l10n_hu_edi.connection']._do_query_transaction_status(
-                        self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
-                        transaction_code,
-                        return_original_request=True,
-                    )
-                except L10nHuEdiConnectionError as e:
-                    return self.write({
-                        'l10n_hu_edi_messages': {
-                            'error_title': _('Error querying active transactions while attempting timeout recovery.'),
-                            'errors': e.errors,
-                            'blocking_level': 'error_but_continue',
-                        },
-                    })
-
-                for processing_result in results['processing_results']:
-                    # Match invoice if the returned XML is the same as the one stored in Odoo.
-                    # Match annulment if the invoice name matches.
-                    matched_invoice = self.filtered(
-                        lambda m: (
-                            (
-                                m.l10n_hu_edi_state == 'send_timeout'
-                                and etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
-                                    == etree.canonicalize(processing_result['original_file'])
-                            ) or (
-                                m.l10n_hu_edi_state == 'cancel_timeout'
-                                and m.name == processing_result['original_xml'].findtext('{*}annulmentReference')
-                            )
-                        )
-                    )
-
-                    if matched_invoice:
-                        # Set the correct transaction code on the matched invoice
-                        matched_invoice.l10n_hu_edi_transaction_code = transaction_code
-                        matched_invoice._l10n_hu_edi_process_query_transaction_result(processing_result, results['annulment_status'])
-
-            available_pages = transaction_list['available_pages']
-            page += 1
-
-        # Any invoices that could not be matched to the query results should be regarded as not received by NAV.
-        self.filtered(lambda m: m.l10n_hu_edi_state == 'send_timeout').write({
-            'l10n_hu_edi_state': False,
-            'l10n_hu_edi_messages': {
-                'error_title': _('Sending failed due to time-out.'),
-                'errors': [],
-            }
-        })
-        self.filtered(lambda m: m.l10n_hu_edi_state == 'cancel_timeout').write({
-            'l10n_hu_edi_state': 'confirmed_warning',
-            'l10n_hu_edi_messages': {
-                'error_title': _('Annulment failed due to time-out.'),
-                'errors': [],
-            }
-        })
-
     def _l10n_hu_edi_request_cancel(self, code, reason):
         """ Send a cancellation request for all invoices in `self`. """
         self._l10n_hu_edi_check_action('request_cancel')
@@ -855,7 +753,7 @@ class AccountMove(models.Model):
                 return self.write({
                     'l10n_hu_edi_state': 'cancel_timeout',
                     'l10n_hu_edi_messages': {
-                        'error_title': _('Cancellation request timed out.'),
+                        'error_title': _('Cancellation request timed out. Please wait at least 6 minutes, then update the status.'),
                         'errors': e.errors,
                         'blocking_level': 'error_but_continue',
                     },

@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from base64 import b64decode, b64encode
-import datetime
+from datetime import datetime, timedelta, timezone
 import dateutil.parser
 import uuid
 import requests
@@ -44,7 +44,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     def _do_token_exchange(self, credentials):
         """ Request a token for invoice submission.
         :param credentials: a dictionary {'vat': str, 'mode': 'production' || 'test', 'username': str, 'password': str, 'signature_key': str, 'replacement_key': str}
-        :return: a dictionary {'token': str, 'token_validity_to': datetime.datetime}
+        :return: a dictionary {'token': str, 'token_validity_to': datetime}
         :raise: L10nHuEdiConnectionError
         """
         def decrypt_aes128(key, encrypted_token):
@@ -70,10 +70,10 @@ class L10nHuEdiConnection(models.AbstractModel):
         token_validity_to = response_xml.findtext('{*}tokenValidityTo')
         try:
             # Convert into a naive UTC datetime, since Odoo can't store timezone-aware datetimes
-            token_validity_to = dateutil.parser.isoparse(token_validity_to).astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            token_validity_to = dateutil.parser.isoparse(token_validity_to).astimezone(timezone.utc).replace(tzinfo=None)
         except ValueError:
             _logger.warning('Could not parse token validity end timestamp!')
-            token_validity_to = datetime.datetime.utcnow() + datetime.timedelta(minutes=5)
+            token_validity_to = datetime.utcnow() + timedelta(minutes=5)
 
         if not encrypted_token:
             raise L10nHuEdiConnectionError(_('Missing token in response from NAV.'))
@@ -223,6 +223,7 @@ class L10nHuEdiConnection(models.AbstractModel):
                 'annulment': transaction_xml.findtext('{*}technicalAnnulment') == 'true',
                 'username': transaction_xml.findtext('{*}insCusUser'),
                 'source': transaction_xml.findtext('{*}source'),
+                'send_time': datetime.fromisoformat(transaction_xml.findtext('{*}insDate').replace('Z', '')),
             }
             for transaction_xml in response_xml.findall('{*}transactionListResult/{*}transaction')
         ]
@@ -251,7 +252,7 @@ class L10nHuEdiConnection(models.AbstractModel):
 
         annulment_hashes = []
         for annulment_operation in annulment_operations:
-            annulment_operation['annulmentTimestamp'] = format_timestamp(datetime.datetime.utcnow())
+            annulment_operation['annulmentTimestamp'] = format_timestamp(datetime.utcnow())
             annulment_data = self.env['ir.qweb']._render('l10n_hu_edi.invoice_annulment', annulment_operation)
             annulment_data_b64 = b64encode(annulment_data.encode()).decode('utf-8')
             template_values['annulments'].append({
@@ -278,7 +279,7 @@ class L10nHuEdiConnection(models.AbstractModel):
     # === Helpers: XML generation === #
 
     def _get_header_values(self, credentials, invoice_hashs=None):
-        timestamp = datetime.datetime.utcnow()
+        timestamp = datetime.utcnow()
         request_id = ('ODOO' + str(uuid.uuid4()).replace('-', ''))[:30]
         request_signature = self._calculate_request_signature(credentials['signature_key'], request_id, timestamp, invoice_hashs=invoice_hashs)
         odoo_version = release.version

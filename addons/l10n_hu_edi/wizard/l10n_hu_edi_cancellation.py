@@ -32,7 +32,7 @@ class L10nHuEdiCancellation(models.TransientModel):
     def button_request_cancel(self):
         self.invoice_id._l10n_hu_edi_request_cancel(self.code, self.reason)
 
-        if self.invoice_id._l10n_hu_edi_get_valid_action() == 'query_status':
+        if 'query_status' in self.invoice_id._l10n_hu_edi_get_valid_actions():
             time.sleep(2)
             self.invoice_id._l10n_hu_edi_query_status()
 

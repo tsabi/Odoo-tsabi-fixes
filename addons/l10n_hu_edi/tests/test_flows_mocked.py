@@ -78,7 +78,7 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
                 self.patch_post({'queryTransactionStatus': response_data}):
             with contextlib.suppress(UserError):
                 invoice.l10n_hu_edi_button_update_status()
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': False}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'rejected'}])
 
     def test_timeout_recovery_success(self):
         with freeze_time('2024-01-25T15:28:53Z'), \
@@ -110,7 +110,8 @@ class L10nHuEdiTestFlowsMocked(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             with tools.file_open('l10n_hu_edi/tests/mocked_requests/queryTransactionStatus_response_error.xml', 'r') as response_file:
                 response_data = response_file.read()
             with self.patch_post({'queryTransactionStatus': response_data}):
-                cancel_wizard.button_request_cancel()
+                with contextlib.suppress(UserError):
+                    cancel_wizard.button_request_cancel()
                 self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed_warning'}])
 
     def test_cancel_invoice_pending(self):
