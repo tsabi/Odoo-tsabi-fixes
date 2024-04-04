@@ -1,6 +1,6 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import fields, models, api
+from odoo import _lt, fields, models, api
 
 _SELECTION_TAX_TYPE = [
     ('VAT', 'Normal VAT (percent based)'),
@@ -26,17 +26,17 @@ _SELECTION_TAX_TYPE = [
 ]
 
 _DEFAULT_TAX_REASONS = {
-    'AAM': 'AAM Alanyi adómentes',
-    'TAM': 'TAM Tárgyi adómentes',
-    'KBAET': 'KBAET EU-ba eladás - ÁFA tv.89.§',
-    'KBAUK': 'KBAUK Új közlekedési eszköz EU-n belülre - ÁFA tv.89.§(2)',
-    'EAM': 'EAM Termékexport 3.országba - ÁFA tv.98-109.§',
-    'NAM': 'NAM egyéb export ügylet ÁFA tv 110-118.§',
-    'ATK': 'ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§',
-    'EUFAD37': 'EUFAD37 ÁFA tv. 37.§ (1) Fordított ÁFA másik EU-s országban',
-    'EUFADE': 'EUFADE Fordított ÁFA másik EU-s országban nem ÁFA tv. 37.§ (1)',
-    'EUE': 'EUE 2.EU-s országban teljesített eladás',
-    'HO': 'HO Szolgáltatás 3.országba',
+    'AAM': _lt('AAM Alanyi adómentes'),
+    'TAM': _lt('TAM Tárgyi adómentes'),
+    'KBAET': _lt('KBAET EU-ba eladás - ÁFA tv.89.§'),
+    'KBAUK': _lt('KBAUK Új közlekedési eszköz EU-n belülre - ÁFA tv.89.§(2)'),
+    'EAM': _lt('EAM Termékexport 3.országba - ÁFA tv.98-109.§'),
+    'NAM': _lt('NAM egyéb export ügylet ÁFA tv 110-118.§'),
+    'ATK': _lt('ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§'),
+    'EUFAD37': _lt('EUFAD37 ÁFA tv. 37.§ (1) Fordított ÁFA másik EU-s országban'),
+    'EUFADE': _lt('EUFADE Fordított ÁFA másik EU-s országban nem ÁFA tv. 37.§ (1)'),
+    'EUE': _lt('EUE 2.EU-s országban teljesített eladás'),
+    'HO': _lt('HO Szolgáltatás 3.országba'),
 }
 
 class AccountTax(models.Model):
@@ -50,9 +50,11 @@ class AccountTax(models.Model):
     l10n_hu_tax_reason = fields.Char(
         string='(HU) VAT Tax Exemption Reason',
         help='May be used to provide support for the use of a VAT-exempt VAT tax type.',
+        compute='_compute_l10n_hu_tax_reason',
+        readonly=False,
     )
 
-    @api.onchange('l10n_hu_tax_type')
-    def l10n_hu_change_vat_type(self):
+    @api.depends('l10n_hu_tax_type')
+    def _compute_l10n_hu_tax_reason(self):
         for tax in self:
             tax.l10n_hu_tax_reason = _DEFAULT_TAX_REASONS.get(tax.l10n_hu_tax_type, False)

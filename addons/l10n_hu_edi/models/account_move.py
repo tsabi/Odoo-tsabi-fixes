@@ -125,16 +125,6 @@ class AccountMove(models.Model):
 
     # === Overrides === #
 
-    def action_reverse(self):
-        # EXTEND account
-        unconfirmed = self.filtered(lambda m: m.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning'])
-        if unconfirmed:
-            raise UserError(_(
-                'Invoices %s have not yet been confirmed by NAV. Please wait for confirmation before issuing a modification invoice.',
-                unconfirmed.mapped('name'))
-            )
-        return super().action_reverse()
-
     def _need_cancel_request(self):
         # EXTEND account
         # Technical annulment should be available only in debug mode
@@ -227,6 +217,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_check_action(self, action):
         """ Raise an error if the given action cannot be performed with the invoices in self. """
+        # TODO: remove this before merging
         bad_invoices = self.filtered(lambda m: action not in m._l10n_hu_edi_get_valid_actions())
         if bad_invoices:
             raise UserError(_('Action %s cannot be processed for invoices %s!', action, bad_invoices.mapped('name')))
@@ -252,7 +243,7 @@ class AccountMove(models.Model):
         """ Get the invoice currency / HUF rate.
 
         If the company currency is HUF, we estimate this based on the invoice lines,
-        using a MMSE estimator assuming random (Gaussian) rounding errors.
+        using a MMSE estimator.
 
         If the company currency is not HUF (e.g. Hungarian companies that do their accounting in euro),
         we get the rate from the currency rates.
