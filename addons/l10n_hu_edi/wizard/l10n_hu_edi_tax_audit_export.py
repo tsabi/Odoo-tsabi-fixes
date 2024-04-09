@@ -10,7 +10,7 @@ import contextlib
 
 class L10nHuEdiTaxAuditExport(models.TransientModel):
     _name = 'l10n_hu_edi.tax_audit_export'
-    _description = 'Tax Audit Export Wizard'
+    _description = 'Tax audit export - Adóhatósági Ellenőrzési Adatszolgáltatás'
 
     date_from = fields.Date(
         string='Date From'

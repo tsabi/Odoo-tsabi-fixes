@@ -27,7 +27,7 @@
     </record>
 
     <record id="action_l10n_hu_edi_tax_audit_export_form" model="ir.actions.act_window">
-        <field name="name">Tax audit export</field>
+        <field name="name">Tax audit export - Adóhatósági Ellenőrzési Adatszolgáltatás</field>
         <field name="res_model">l10n_hu_edi.tax_audit_export</field>
         <field name="view_mode">form</field>
         <field name="view_id" ref="l10n_hu_edi.l10n_hu_edi_tax_audit_export_form"/>
@@ -36,7 +36,7 @@
 
     <menuitem id="menu_finance_reports_hu" name="Hungary" parent="account.menu_finance_reports" sequence="30"/>
     <menuitem id="menu_hu_tax_audit_export"
-              name="Tax audit export"
+              name="Tax audit export - Adóhatósági Ellenőrzési Adatszolgáltatás"
               parent="menu_finance_reports_hu"
               sequence="40"
               action="action_l10n_hu_edi_tax_audit_export_form"/>
