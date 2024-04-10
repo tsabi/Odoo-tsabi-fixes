@@ -206,6 +206,7 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
             'partner_id': self.partner_company.id,
             'invoice_date': self.today,
             'delivery_date': self.today,
+            'l10n_hu_payment_mode': 'TRANSFER',
             'invoice_cash_rounding_id': self.env.ref('l10n_hu_edi.cash_rounding_1_huf').id,
             'invoice_line_ids': [
                 Command.create({
@@ -245,6 +246,7 @@ class L10nHuEdiTestCommon(AccountTestInvoicingCommon):
             'partner_id': self.partner_company.id,
             'invoice_date': self.today,
             'delivery_date': self.today,
+            'l10n_hu_payment_mode': 'TRANSFER',
             'invoice_line_ids': [
                 Command.create({
                     'product_id': self.product_a.id,

@@ -52,6 +52,7 @@
                     <smallBusinessIndicator>false</smallBusinessIndicator>
                     <currencyCode>EUR</currencyCode>
                     <exchangeRate>380.769998</exchangeRate>
+                    <paymentMethod>TRANSFER</paymentMethod>
                     <paymentDate>2024-02-01</paymentDate>
                     <cashAccountingIndicator>false</cashAccountingIndicator>
                     <invoiceAppearance>PAPER</invoiceAppearance>

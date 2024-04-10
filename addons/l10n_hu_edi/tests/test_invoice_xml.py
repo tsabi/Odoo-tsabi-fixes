@@ -67,7 +67,7 @@ class L10nHuEdiTestInvoiceXml(L10nHuEdiTestCommon):
     def test_advance_invoice(self):
         # Skip if sale is not installed
         if 'sale_line_ids' not in self.env['account.move.line']:
-            self.skipTest()
+            self.skipTest('Sale module not installed, skipping advance invoice tests.')
         with freeze_time('2024-02-01'):
             advance_invoice, final_invoice = self.create_advance_invoice()
             advance_invoice.action_post()

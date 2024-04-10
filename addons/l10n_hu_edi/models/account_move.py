@@ -22,6 +22,18 @@ _logger = logging.getLogger(__name__)
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
+    l10n_hu_payment_mode = fields.Selection(
+        [
+            ("TRANSFER", "Transfer"),
+            ("CASH", "Cash"),
+            ("CARD", "Credit/debit card"),
+            ("VOUCHER", "Voucher"),
+            ("OTHER", "Other"),
+        ],
+        string="Payment mode",
+        help="(HU) Expected payment mode of the invoice.",
+    )
+
     # === EDI Fields === #
     l10n_hu_edi_state = fields.Selection(
         ######################################################################################################################

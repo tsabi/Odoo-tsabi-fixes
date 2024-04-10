@@ -38,6 +38,10 @@
                         invisible="l10n_hu_edi_server_mode in [False, 'production']"/>
             </xpath>
 
+            <xpath expr="//label[@for='journal_id']" position="before">
+                <field name="l10n_hu_payment_mode" invisible="country_code != 'HU'" readonly="state != 'draft'"/>
+            </xpath>
+
             <!-- Documents tab -->
             <xpath expr="//page[@id='other_tab_entry']" position="after">
                 <page id="l10n_hu_edi"
