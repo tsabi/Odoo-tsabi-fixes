@@ -2,6 +2,7 @@
 
 import base64
 from datetime import timedelta
+from itertools import islice
 
 from lxml import etree
 
@@ -159,14 +160,14 @@ class ResCompany(models.Model):
 
                 # Step 2: Query unknown transactions in reverse order (latest first) and update invoice states accordingly.
                 # If there are too many, we should only query the last 10, to avoid pointlessly making huge numbers of requests.
-                transactions_to_query = [
+                transactions_to_query = (
                     t for t in reversed(transactions)
                     if t['username'] == company.sudo().l10n_hu_edi_username
                         and t['source'] == 'MGM'
                         and t['transaction_code'] not in invoices_to_check.mapped('l10n_hu_edi_transaction_code')
-                ]
+                )
 
-                for transaction in transactions_to_query[0:10]:
+                for transaction in islice(transactions_to_query, 10):
                     try:
                         results = connection.do_query_transaction_status(
                             company.sudo()._l10n_hu_edi_get_credentials_dict(),
@@ -188,9 +189,11 @@ class ResCompany(models.Model):
                             lambda m: (
                                 # 1. Match invoice if the entire XML matches.
                                 # For performance, we first check the invoice name before trying to match the whole XML.
-                                m.name == invoice_name
-                                and etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
-                                    == canonicalized_attachment
+                                (
+                                    m.name == invoice_name
+                                    and etree.canonicalize(base64.b64decode(m.l10n_hu_edi_attachment).decode())
+                                        == canonicalized_attachment
+                                )
                                 or m.name == annulment_invoice_name
                             ) and (
                                 # 2. We update the invoice state only if:
@@ -203,12 +206,14 @@ class ResCompany(models.Model):
                                     'INVOICE_NUMBER_NOT_UNIQUE' in error or 'ANNULMENT_IN_PROGRESS' in error
                                     for error in m.l10n_hu_edi_messages['errors']
                                 )
-                                or transaction['send_time'] >= m.l10n_hu_edi_send_time
-                                and not (
-                                    processing_result['technical_validation_messages']
-                                    or any(
-                                        message['validation_error_code'] in ['INVOICE_NUMBER_NOT_UNIQUE', 'ANNULMENT_IN_PROGRESS']
-                                        for message in processing_result['business_validation_messages']
+                                or (
+                                    transaction['send_time'] >= m.l10n_hu_edi_send_time
+                                    and not (
+                                        processing_result['technical_validation_messages']
+                                        or any(
+                                            message['validation_error_code'] in ['INVOICE_NUMBER_NOT_UNIQUE', 'ANNULMENT_IN_PROGRESS']
+                                            for message in processing_result['business_validation_messages']
+                                        )
                                     )
                                 )
                             )

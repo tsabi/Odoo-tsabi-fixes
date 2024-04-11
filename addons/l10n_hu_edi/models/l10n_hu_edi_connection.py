@@ -366,23 +366,12 @@ class L10nHuEdiConnection:
             raise L10nHuEdiConnectionError(_('Service should be one of %s!', ', '.join(services)))
 
         headers = {'content-type': 'application/xml', 'accept': 'application/xml'}
-        if self.env.context.get('nav_comm_debug'):
-            _logger.warning('REQUEST: POST: %s==>headers:%s\ndata:%s', str(url), str(headers), str(data))
-
         try:
             response_object = self.session.post(url, data=data, headers=headers, timeout=timeout)
         except requests.Timeout as e:
             raise L10nHuEdiConnectionError(_('Connection to NAV servers timed out.'), code='timeout') from e
         except requests.RequestException as e:
             raise L10nHuEdiConnectionError(str(e)) from e
-
-        if self.env.context.get('nav_comm_debug'):
-            _logger.warning(
-                'RESPONSE: status_code:%s\nheaders:%s\ndata:%s',
-                response_object.status_code,
-                response_object.headers,
-                response_object.text,
-            )
 
         try:
             response_xml = etree.fromstring(response_object.text.encode())

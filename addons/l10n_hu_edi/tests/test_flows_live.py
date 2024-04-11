@@ -26,7 +26,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
     @classmethod
     def write_edi_credentials(cls):
         # OVERRIDE
-        return cls.company_data['company'].with_context(nav_comm_debug=True).write({**TEST_CRED})
+        return cls.company_data['company'].write({**TEST_CRED})
 
     # === Tests === #
 

@@ -13,6 +13,7 @@ from odoo import fields, models, api, _
 from odoo.http import request
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, groupby
+from odoo.tools.misc import split_every
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
 from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnection, L10nHuEdiConnectionError
 from odoo.addons.l10n_hu_edi.models.res_company import L10N_HU_EDI_SERVER_MODE_SELECTION
@@ -141,7 +142,7 @@ class AccountMove(models.Model):
     def _need_cancel_request(self):
         # EXTEND account
         # Technical annulment should be available only in debug mode
-        return super()._need_cancel_request() or (self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning'] and request.session.debug)
+        return super()._need_cancel_request() or (self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning'] and request and request.session.debug)
 
     def button_request_cancel(self):
         # EXTEND 'account'
@@ -160,7 +161,8 @@ class AccountMove(models.Model):
 
     def _post(self, soft=True):
         # EXTEND account
-        to_post = self.filtered(lambda move: move.date <= fields.Date.context_today(self)) if soft else self
+        today = fields.Date.context_today(self)
+        to_post = self.filtered(lambda move: move.date <= today) if soft else self
         for move in to_post.filtered(lambda m: m.country_code == 'HU' and m.is_sale_document()):
             move._l10n_hu_edi_set_chain_index_and_line_number()
         return super()._post(soft=soft)
@@ -310,8 +312,8 @@ class AccountMove(models.Model):
         try:
             with self.env.cr.savepoint(flush=False):
                 self.env.cr.execute('SELECT * FROM account_move WHERE id = ANY(%s) FOR UPDATE NOWAIT', [self.ids])
-        except LockNotAvailable as e:
-            raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?')) from e
+        except LockNotAvailable:
+            raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?')) from None
         yield
         if self.env['account.move.send']._can_commit():
             self.env.cr.commit()
@@ -479,8 +481,8 @@ class AccountMove(models.Model):
         with self._l10n_hu_edi_acquire_lock():
             # Batch by company, with max 100 invoices per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
-                for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
-                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_upload_single_batch(connection)
+                for batch in split_every(100, batch_company):
+                    self.env['account.move'].union(*batch)._l10n_hu_edi_upload_single_batch(connection)
 
     def _l10n_hu_edi_upload_single_batch(self, connection):
         self._l10n_hu_edi_check_action('upload')
@@ -569,7 +571,7 @@ class AccountMove(models.Model):
         with self._l10n_hu_edi_acquire_lock():
             # Querying status should be grouped by company and transaction code
             for __, invoices in groupby(self, lambda m: (m.company_id, m.l10n_hu_edi_transaction_code)):
-                self.env['account.move'].browse([m.id for m in invoices])._l10n_hu_edi_query_status_single_batch(connection)
+                self.env['account.move'].union(*invoices)._l10n_hu_edi_query_status_single_batch(connection)
 
     def _l10n_hu_edi_query_status_single_batch(self, connection):
         """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
@@ -725,8 +727,8 @@ class AccountMove(models.Model):
         with self._l10n_hu_edi_acquire_lock():
             # Batch by company, with max 100 annulment requests per batch.
             for __, batch_company in groupby(self, lambda m: m.company_id):
-                for __, batch in groupby(enumerate(batch_company), lambda x: x[0] // 100):
-                    self.env['account.move'].browse([m.id for __, m in batch])._l10n_hu_edi_request_cancel_single_batch(connection, code, reason)
+                for batch in split_every(100, batch_company):
+                    self.env['account.move'].union(*batch)._l10n_hu_edi_request_cancel_single_batch(connection, code, reason)
 
     def _l10n_hu_edi_request_cancel_single_batch(self, connection, code, reason):
         self._l10n_hu_edi_check_action('request_cancel')
