@@ -1,5 +1,14 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import math
+import base64
+import logging
+import re
+import contextlib
+
+from lxml import etree
+from psycopg2.errors import LockNotAvailable
+
 from odoo import fields, models, api, _
 from odoo.http import request
 from odoo.exceptions import UserError, ValidationError
@@ -7,14 +16,6 @@ from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, gr
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
 from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnection, L10nHuEdiConnectionError
 from odoo.addons.l10n_hu_edi.models.res_company import L10N_HU_EDI_SERVER_MODE_SELECTION
-
-import base64
-import math
-from lxml import etree
-import logging
-import re
-import contextlib
-from psycopg2.errors import LockNotAvailable
 
 _logger = logging.getLogger(__name__)
 
@@ -330,8 +331,8 @@ class AccountMove(models.Model):
             'company_vat_invalid': {
                 'records': self.company_id.filtered(
                     lambda c: (
-                        c.vat and not hu_vat_regex.fullmatch(c.vat)
-                        or c.l10n_hu_group_vat and not hu_vat_regex.fullmatch(c.l10n_hu_group_vat)
+                        (c.vat and not hu_vat_regex.fullmatch(c.vat))
+                        or (c.l10n_hu_group_vat and not hu_vat_regex.fullmatch(c.l10n_hu_group_vat))
                     )
                 ),
                 'message': _('Please enter the Hungarian VAT (and/or Group VAT) number in 12345678-1-12 format!'),
@@ -359,8 +360,8 @@ class AccountMove(models.Model):
                     lambda p: (
                         p.is_company and p.country_code == 'HU'
                         and (
-                            p.vat and not hu_vat_regex.fullmatch(p.vat)
-                            or p.l10n_hu_group_vat and not hu_vat_regex.fullmatch(p.l10n_hu_group_vat)
+                            (p.vat and not hu_vat_regex.fullmatch(p.vat))
+                            or (p.l10n_hu_group_vat and not hu_vat_regex.fullmatch(p.l10n_hu_group_vat))
                         )
                     )
                 ),
@@ -803,6 +804,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_get_invoice_values(self):
         eu_country_codes = set(self.env.ref('base.europe').country_ids.mapped('code'))
+
         def get_vat_data(partner, force_vat=None):
             if partner.country_code == 'HU' or force_vat:
                 return {
@@ -854,7 +856,7 @@ class AccountMove(models.Model):
             'lines_values': [],
         }
 
-        sign = self.is_inbound() and 1.0 or -1.0
+        sign = 1.0 if self.is_inbound() else -1.0
         line_number_offset = min(n for n in self.invoice_line_ids.mapped('l10n_hu_line_number') if n) - 1
 
         for line in self.line_ids.filtered(lambda l: l.l10n_hu_line_number).sorted(lambda l: l.l10n_hu_line_number):
@@ -974,7 +976,7 @@ class AccountMove(models.Model):
 
     def _get_name_invoice_report(self):
         self.ensure_one()
-        return self.country_code == 'HU' and 'l10n_hu_edi.report_invoice_document' or super()._get_name_invoice_report()
+        return 'l10n_hu_edi.report_invoice_document' if self.country_code == 'HU' else super()._get_name_invoice_report()
 
     def _l10n_hu_get_invoice_totals_for_report(self):
 

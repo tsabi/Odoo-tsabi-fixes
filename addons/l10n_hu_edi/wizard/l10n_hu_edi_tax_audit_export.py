@@ -1,12 +1,13 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import base64
+import contextlib
+import io
+import zipfile
+
 from odoo import api, models, fields, _
 from odoo.exceptions import UserError
 
-import base64
-import io
-import zipfile
-import contextlib
 
 class L10nHuEdiTaxAuditExport(models.TransientModel):
     _name = 'l10n_hu_edi.tax_audit_export'

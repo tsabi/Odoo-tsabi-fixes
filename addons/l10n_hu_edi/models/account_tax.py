@@ -39,6 +39,7 @@ _DEFAULT_TAX_REASONS = {
     'HO': _lt('HO Szolgáltatás 3.országba'),
 }
 
+
 class AccountTax(models.Model):
     _inherit = 'account.tax'
 

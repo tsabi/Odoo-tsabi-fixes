@@ -1,20 +1,21 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import _, release
-from odoo.tools import cleanup_xml_node
+from base64 import b64decode, b64encode
+import binascii
+from datetime import datetime, timedelta, timezone
+import hashlib
+import logging
+import secrets
 
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-import hashlib
-from base64 import b64decode, b64encode
-from datetime import datetime, timedelta, timezone
 import dateutil.parser
-import secrets
-import requests
-import binascii
 from lxml import etree
+import requests
 
-import logging
+from odoo import _, release
+from odoo.tools import cleanup_xml_node
+
 
 _logger = logging.getLogger(__name__)
 
@@ -30,8 +31,10 @@ XML_NAMESPACES = {
 def format_bool(value):
     return 'true' if value else 'false'
 
+
 def format_timestamp(value):
     return value.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
 
 def decrypt_aes128(key, encrypted_token):
     """ Decrypt AES-128-ECB encrypted bytes.
@@ -45,6 +48,7 @@ def decrypt_aes128(key, encrypted_token):
     unpadded_token = unpadder.update(decrypted_token) + unpadder.finalize()
     return unpadded_token
 
+
 class L10nHuEdiConnectionError(Exception):
     def __init__(self, errors, code=None):
         if not isinstance(errors, list):
@@ -52,6 +56,7 @@ class L10nHuEdiConnectionError(Exception):
         self.errors = errors
         self.code = code
         super().__init__('\n'.join(errors))
+
 
 class L10nHuEdiConnection:
     def __init__(self, env):
