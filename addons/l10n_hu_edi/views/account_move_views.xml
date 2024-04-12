@@ -32,12 +32,6 @@
                 </div>
             </xpath>
 
-            <xpath expr="//field[@name='id']" position="before">
-                <field name="l10n_hu_edi_server_mode" invisible="1"/>
-                <widget name="web_ribbon" title="Test mode" bg_color="bg-warning"
-                        invisible="l10n_hu_edi_server_mode in [False, 'production']"/>
-            </xpath>
-
             <xpath expr="//label[@for='journal_id']" position="before">
                 <field name="l10n_hu_payment_mode" invisible="country_code != 'HU'" readonly="state != 'draft'"/>
             </xpath>
@@ -50,7 +44,6 @@
                     <group>
                         <group>
                             <field name="l10n_hu_edi_state" readonly="1"/>
-                            <field name="l10n_hu_edi_server_mode" readonly="state == 'draft'"/>
                             <field name="l10n_hu_invoice_chain_index" readonly="state == 'draft'"/>
                         </group>
                         <group>

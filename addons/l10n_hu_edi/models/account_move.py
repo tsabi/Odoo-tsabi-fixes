@@ -16,7 +16,6 @@ from odoo.tools import formatLang, float_round, float_repr, cleanup_xml_node, gr
 from odoo.tools.misc import split_every
 from odoo.addons.base_iban.models.res_partner_bank import normalize_iban
 from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import format_bool, L10nHuEdiConnection, L10nHuEdiConnectionError
-from odoo.addons.l10n_hu_edi.models.res_company import L10N_HU_EDI_SERVER_MODE_SELECTION
 
 _logger = logging.getLogger(__name__)
 
@@ -89,10 +88,6 @@ class AccountMove(models.Model):
         string='Invoice Chain Index',
         help='Index in the chain of modification invoices.',
         copy=False,
-    )
-    l10n_hu_edi_server_mode = fields.Selection(
-        selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
-        string='Server Mode',
     )
     l10n_hu_edi_attachment_filename = fields.Char(
         string='Invoice XML filename',
@@ -215,19 +210,16 @@ class AccountMove(models.Model):
         ):
             if self.l10n_hu_edi_state in [False, 'rejected', 'cancelled']:
                 valid_actions.append('upload')
-            # If we are updating the state of an invoice that was already sent to NAV, we should
-            # process it only if we are currently in the same server mode (test/production).
-            elif self.l10n_hu_edi_server_mode == self.company_id.l10n_hu_edi_server_mode:
-                if self.l10n_hu_edi_transaction_code:
-                    valid_actions.append('query_status')
-                if self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']:
-                    valid_actions.append('request_cancel')
-                if not valid_actions:
-                    # Placeholder to denote that the invoice was already processed with a NAV flow,
-                    # useful e.g. for account_move_send's _need_invoice_document which gets called
-                    # at various points in the flow, including after the invoice state has been changed
-                    # to a final state.
-                    valid_actions.append(True)
+            if self.l10n_hu_edi_transaction_code:
+                valid_actions.append('query_status')
+            if self.l10n_hu_edi_state in ['confirmed', 'confirmed_warning']:
+                valid_actions.append('request_cancel')
+            if not valid_actions:
+                # Placeholder to denote that the invoice was already processed with a NAV flow,
+                # useful e.g. for account_move_send's _need_invoice_document which gets called
+                # at various points in the flow, including after the invoice state has been changed
+                # to a final state.
+                valid_actions.append(True)
         return valid_actions
 
     def _l10n_hu_edi_check_action(self, action):
@@ -463,10 +455,8 @@ class AccountMove(models.Model):
                     'name': f'{invoice.name.replace("/", "_")}_cancelled_{invoice.l10n_hu_edi_transaction_code}.xml',
                 })
 
-            invoice.write({
-                'l10n_hu_edi_server_mode': invoice.company_id.l10n_hu_edi_server_mode,
-                'l10n_hu_edi_attachment': base64.b64encode(invoice._l10n_hu_edi_generate_xml()),
-            })
+            invoice.l10n_hu_edi_attachment = base64.b64encode(invoice._l10n_hu_edi_generate_xml())
+
             # Set name & mimetype on newly-created attachment.
             attachment = self.env['ir.attachment'].search([
                 ('res_model', '=', self._name),

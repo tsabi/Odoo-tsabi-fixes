@@ -11,12 +11,6 @@ from odoo.exceptions import UserError
 from odoo.addons.l10n_hu_edi.models.l10n_hu_edi_connection import L10nHuEdiConnection, L10nHuEdiConnectionError, XML_NAMESPACES
 
 
-L10N_HU_EDI_SERVER_MODE_SELECTION = [
-    ('production', 'Production'),
-    ('test', 'Test'),
-]
-
-
 class ResCompany(models.Model):
     _inherit = 'res.company'
 
@@ -33,7 +27,10 @@ class ResCompany(models.Model):
         string='Hungarian Tax Regime',
     )
     l10n_hu_edi_server_mode = fields.Selection(
-        selection=L10N_HU_EDI_SERVER_MODE_SELECTION,
+        selection=[
+            ('production', 'Production'),
+            ('test', 'Test'),
+        ],
         string='Server Mode',
     )
     l10n_hu_edi_username = fields.Char(
@@ -131,7 +128,6 @@ class ResCompany(models.Model):
             # Old invoices are already up-to-date - no need to re-check them.
             invoices_to_check = self.env['account.move'].search([
                 ('company_id', '=', company.id),
-                ('l10n_hu_edi_server_mode', '=', company.l10n_hu_edi_server_mode),
                 ('l10n_hu_edi_send_time', '>=', recovery_start_time),
                 ('l10n_hu_edi_state', '!=', False),
             ])
