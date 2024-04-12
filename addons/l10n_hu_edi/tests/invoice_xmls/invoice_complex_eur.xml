@@ -163,7 +163,7 @@
                         <lineVatRate>
                             <vatExemption>
                                 <case>AAM</case>
-                                <reason>AAM Alanyi adómentes</reason>
+                                <reason>AAM Tax exempt</reason>
                             </vatExemption>
                         </lineVatRate>
                         <lineGrossAmountData>
@@ -205,7 +205,7 @@
                         <vatRate>
                             <vatExemption>
                                 <case>AAM</case>
-                                <reason>AAM Alanyi adómentes</reason>
+                                <reason>AAM Tax exempt</reason>
                             </vatExemption>
                         </vatRate>
                         <vatRateNetData>
