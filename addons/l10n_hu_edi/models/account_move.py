@@ -4,7 +4,6 @@ import math
 import base64
 import logging
 import re
-import contextlib
 
 from lxml import etree
 from psycopg2.errors import LockNotAvailable
@@ -222,13 +221,6 @@ class AccountMove(models.Model):
                 valid_actions.append(True)
         return valid_actions
 
-    def _l10n_hu_edi_check_action(self, action):
-        """ Raise an error if the given action cannot be performed with the invoices in self. """
-        # TODO: remove this before merging
-        bad_invoices = self.filtered(lambda m: action not in m._l10n_hu_edi_get_valid_actions())
-        if bad_invoices:
-            raise UserError(_('Action %s cannot be processed for invoices %s!', action, bad_invoices.mapped('name')))
-
     def _l10n_hu_get_chain_base(self):
         """ Get the base invoice of the invoice chain. """
         modification_invoices = self
@@ -295,20 +287,15 @@ class AccountMove(models.Model):
         ):
             line.l10n_hu_line_number = line_number
 
-    @contextlib.contextmanager
     def _l10n_hu_edi_acquire_lock(self):
-        """ Acquire a write lock on the invoices in self. On exit, commit to DB. """
+        """ Acquire a write lock on the invoices in self. """
         if not self:
-            yield
             return
         try:
             with self.env.cr.savepoint(flush=False):
                 self.env.cr.execute('SELECT * FROM account_move WHERE id = ANY(%s) FOR UPDATE NOWAIT', [self.ids])
         except LockNotAvailable:
             raise UserError(_('Could not acquire lock on invoices - is another user performing operations on them?')) from None
-        yield
-        if self.env['account.move.send']._can_commit():
-            self.env.cr.commit()
 
     # === EDI: Flow === #
 
@@ -439,8 +426,6 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_upload(self, connection):
         """ Generate invoice XMLs and send to NAV. """
-        self._l10n_hu_edi_check_action('upload')
-
         for invoice in self:
             # If we come from the 'cancelled' state, this means the previous XML had been confirmed
             # before it was cancelled.
@@ -468,15 +453,12 @@ class AccountMove(models.Model):
                 'mimetype': 'application/xml',
             })
 
-        with self._l10n_hu_edi_acquire_lock():
-            # Batch by company, with max 100 invoices per batch.
-            for __, batch_company in groupby(self, lambda m: m.company_id):
-                for batch in split_every(100, batch_company):
-                    self.env['account.move'].union(*batch)._l10n_hu_edi_upload_single_batch(connection)
+        # Batch by company, with max 100 invoices per batch.
+        for __, batch_company in groupby(self, lambda m: m.company_id):
+            for batch in split_every(100, batch_company):
+                self.env['account.move'].union(*batch)._l10n_hu_edi_upload_single_batch(connection)
 
     def _l10n_hu_edi_upload_single_batch(self, connection):
-        self._l10n_hu_edi_check_action('upload')
-
         try:
             token_result = connection.do_token_exchange(self.company_id.sudo()._l10n_hu_edi_get_credentials_dict())
         except L10nHuEdiConnectionError as e:
@@ -556,16 +538,13 @@ class AccountMove(models.Model):
             ('l10n_hu_edi_transaction_code', 'in', self.mapped('l10n_hu_edi_transaction_code')),
             ('l10n_hu_edi_state', 'in', ['sent', 'cancel_sent']),
         ])
-        self._l10n_hu_edi_check_action('query_status')
 
-        with self._l10n_hu_edi_acquire_lock():
-            # Querying status should be grouped by company and transaction code
-            for __, invoices in groupby(self, lambda m: (m.company_id, m.l10n_hu_edi_transaction_code)):
-                self.env['account.move'].union(*invoices)._l10n_hu_edi_query_status_single_batch(connection)
+        # Querying status should be grouped by company and transaction code
+        for __, invoices in groupby(self, lambda m: (m.company_id, m.l10n_hu_edi_transaction_code)):
+            self.env['account.move'].union(*invoices)._l10n_hu_edi_query_status_single_batch(connection)
 
     def _l10n_hu_edi_query_status_single_batch(self, connection):
         """ Check the NAV status for invoices that share the same transaction code (uploaded in a single batch). """
-        self._l10n_hu_edi_check_action('query_status')
         try:
             results = connection.do_query_transaction_status(
                 self.company_id.sudo()._l10n_hu_edi_get_credentials_dict(),
@@ -713,15 +692,12 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_request_cancel(self, connection, code, reason):
         """ Send a cancellation request for all invoices in `self`. """
-        self._l10n_hu_edi_check_action('request_cancel')
-        with self._l10n_hu_edi_acquire_lock():
-            # Batch by company, with max 100 annulment requests per batch.
-            for __, batch_company in groupby(self, lambda m: m.company_id):
-                for batch in split_every(100, batch_company):
-                    self.env['account.move'].union(*batch)._l10n_hu_edi_request_cancel_single_batch(connection, code, reason)
+        # Batch by company, with max 100 annulment requests per batch.
+        for __, batch_company in groupby(self, lambda m: m.company_id):
+            for batch in split_every(100, batch_company):
+                self.env['account.move'].union(*batch)._l10n_hu_edi_request_cancel_single_batch(connection, code, reason)
 
     def _l10n_hu_edi_request_cancel_single_batch(self, connection, code, reason):
-        self._l10n_hu_edi_check_action('request_cancel')
         for i, invoice in enumerate(self, start=1):
             invoice.l10n_hu_edi_batch_upload_index = i
 

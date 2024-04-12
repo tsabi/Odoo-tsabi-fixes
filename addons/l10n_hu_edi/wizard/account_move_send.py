@@ -92,6 +92,8 @@ class AccountMoveSend(models.TransientModel):
 
         with L10nHuEdiConnection(self.env) as connection:
             invoices_to_upload._l10n_hu_edi_upload(connection)
+            if self._can_commit():
+                self.env.cr.commit()
 
             if any(m.l10n_hu_edi_state == 'sent' for m in invoices_hu):
                 # If any invoices were just sent, wait so that NAV has enough time to process them
