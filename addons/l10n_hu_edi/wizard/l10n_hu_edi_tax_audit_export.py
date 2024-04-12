@@ -102,7 +102,7 @@ class L10nHuEdiTaxAuditExport(models.TransientModel):
                         else:
                             # Case 2: No XML was generated for this invoice.
                             if not invoice.l10n_hu_invoice_chain_index:
-                                invoice._l10n_hu_edi_set_chain_index_and_line_number()
+                                invoice._l10n_hu_edi_set_chain_index()
                             invoice_xml = invoice._l10n_hu_edi_generate_xml()
 
                         filename = f'{invoice.name.replace("/", "_")}.xml'

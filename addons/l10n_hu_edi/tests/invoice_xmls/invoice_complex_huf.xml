@@ -185,7 +185,7 @@
                         <lineVatRate>
                             <vatOutOfScope>
                                 <case>ATK</case>
-                                <reason>ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§</reason>
+                                <reason>ATK Outside the scope of VAT - VAT tv.2-3.§</reason>
                             </vatOutOfScope>
                         </lineVatRate>
                         <lineGrossAmountData>
@@ -243,7 +243,7 @@
                         <vatRate>
                           <vatOutOfScope>
                             <case>ATK</case>
-                            <reason>ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§</reason>
+                            <reason>ATK Outside the scope of VAT - VAT tv.2-3.§</reason>
                           </vatOutOfScope>
                         </vatRate>
                         <vatRateNetData>

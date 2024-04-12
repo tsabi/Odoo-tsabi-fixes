@@ -158,7 +158,7 @@ class AccountMove(models.Model):
         today = fields.Date.context_today(self)
         to_post = self.filtered(lambda move: move.date <= today) if soft else self
         for move in to_post.filtered(lambda m: m.country_code == 'HU' and m.is_sale_document()):
-            move._l10n_hu_edi_set_chain_index_and_line_number()
+            move._l10n_hu_edi_set_chain_index()
         return super()._post(soft=soft)
 
     # === Actions === #
@@ -260,13 +260,12 @@ class AccountMove(models.Model):
             date=self.invoice_date,
         )
 
-    def _l10n_hu_edi_set_chain_index_and_line_number(self):
-        """ Set the l10n_hu_invoice_chain_index and l10n_hu_line_number fields. """
+    def _l10n_hu_edi_set_chain_index(self):
+        """ Set the l10n_hu_invoice_chain_index field. """
         self.ensure_one()
         base_invoice = self._l10n_hu_get_chain_base()
         if base_invoice == self:
             self.l10n_hu_invoice_chain_index = -1  # -1 indicates a base invoice (0 indicates the chain index was not set).
-            next_line_number = 1
         else:
             # Lock base invoice to prevent concurrent updates, ensuring sequence integrity.
             base_invoice._l10n_hu_edi_acquire_lock()
@@ -277,15 +276,6 @@ class AccountMove(models.Model):
                 self.l10n_hu_invoice_chain_index = last_chain_invoice.l10n_hu_invoice_chain_index + 1 or 1
             else:
                 last_chain_invoice = prev_chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index == (self.l10n_hu_invoice_chain_index - 1 or -1))
-
-            next_line_number = (max(last_chain_invoice.line_ids.mapped('l10n_hu_line_number')) or 0) + 1
-
-        # Set l10n_hu_line_number consecutively, first on product lines, then on rounding line
-        for line_number, line in enumerate(
-            self.line_ids.filtered(lambda l: l.display_type in ['product', 'rounding']).sorted(lambda l: l.display_type),
-            start=next_line_number,
-        ):
-            line.l10n_hu_line_number = line_number
 
     def _l10n_hu_edi_acquire_lock(self):
         """ Acquire a write lock on the invoices in self. """
@@ -825,13 +815,23 @@ class AccountMove(models.Model):
         }
 
         sign = 1.0 if self.is_inbound() else -1.0
-        line_number_offset = min(n for n in self.invoice_line_ids.mapped('l10n_hu_line_number') if n) - 1
 
-        for line in self.line_ids.filtered(lambda l: l.l10n_hu_line_number).sorted(lambda l: l.l10n_hu_line_number):
+        prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices().filtered(
+            lambda m: m.l10n_hu_invoice_chain_index < self.l10n_hu_invoice_chain_index
+        )
+        first_line_number = sum(
+            len(move.line_ids.filtered(lambda l: l.display_type in ['product', 'rounding']))
+            for move in prev_chain_invoices
+        ) + 1
+
+        for (line_number, line) in enumerate(
+            self.line_ids.filtered(lambda l: l.display_type in ['product', 'rounding']).sorted(lambda l: l.display_type),
+            start=first_line_number,
+        ):
             line_values = {
                 'line': line,
-                'lineNumber': line.l10n_hu_line_number - line_number_offset,
-                'lineNumberReference': base_invoice != self and line.l10n_hu_line_number,
+                'lineNumber': line_number - first_line_number + 1,
+                'lineNumberReference': base_invoice != self and line_number,
                 'lineExpressionIndicator': line.product_id and line.product_uom_id,
                 'lineNatureIndicator': {False: 'OTHER', 'service': 'SERVICE'}.get(line.product_id.type, 'PRODUCT'),
                 'lineDescription': line.name.replace('\n', ' '),
@@ -995,13 +995,6 @@ class AccountMove(models.Model):
 
 class AccountInvoiceLine(models.Model):
     _inherit = 'account.move.line'
-
-    # === Technical fields === #
-    l10n_hu_line_number = fields.Integer(
-        string='(HU) Line Number',
-        help='A consecutive indexing of invoice lines within the invoice chain.',
-        copy=False,
-    )
 
     @api.depends('move_id.delivery_date')
     def _compute_currency_rate(self):
