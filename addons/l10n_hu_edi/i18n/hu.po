@@ -170,6 +170,16 @@ msgid "Bank Account:"
 msgstr "Bankszámla:"
 
 #. module: l10n_hu_edi
+#: model:ir.model.fields.selection,name:l10n_hu_edi.selection__l10n_hu_edi_tax_audit_export__selection_mode__date
+msgid "By date"
+msgstr "Dátum szerint"
+
+#. module: l10n_hu_edi
+#: model:ir.model.fields.selection,name:l10n_hu_edi.selection__l10n_hu_edi_tax_audit_export__selection_mode__name
+msgid "By serial number"
+msgstr "Sorszám szerint"
+
+#. module: l10n_hu_edi
 #: model:ir.model.fields.selection,name:l10n_hu_edi.selection__product_template__l10n_hu_product_code_type__csk
 msgid "CSK - Packaging Catalogue Code"
 msgstr "CSK - Csomagolási katalógus kód"
@@ -870,6 +880,16 @@ msgid ""
 msgstr ""
 "NONREFUNDABLE_VAT - a 11. vagy 14. szakasz alapján felmerült HÉA, és a "
 "kedvezményezett beleegyezett a HÉA visszatérítésébe."
+
+#. module: l10n_hu_edi
+#: model:ir.model.fields,field_description:l10n_hu_edi.field_l10n_hu_edi_tax_audit_export__name_from
+msgid "Name From"
+msgstr "Név Honnan"
+
+#. module: l10n_hu_edi
+#: model:ir.model.fields,field_description:l10n_hu_edi.field_l10n_hu_edi_tax_audit_export__name_to
+msgid "Name To"
+msgstr "Név A"
 
 #. module: l10n_hu_edi
 #. odoo-python

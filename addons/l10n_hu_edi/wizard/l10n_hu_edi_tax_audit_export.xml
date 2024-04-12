@@ -7,11 +7,14 @@
         <field name="arch" type="xml">
             <form>
                 <group>
+                    <field name="selection_mode" widget="radio"/>
                     <group>
-                        <field name="date_from"/>
+                        <field name="date_from" invisible="selection_mode != 'date'"/>
+                        <field name="name_from" invisible="selection_mode != 'name'"/>
                     </group>
                     <group>
-                        <field name="date_to"/>
+                        <field name="date_to" invisible="selection_mode != 'date'"/>
+                        <field name="name_to" invisible="selection_mode != 'name'"/>
                     </group>
                 </group>
                 <div invisible="not export_file">
