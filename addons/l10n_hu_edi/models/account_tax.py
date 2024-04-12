@@ -26,17 +26,17 @@ _SELECTION_TAX_TYPE = [
 ]
 
 _DEFAULT_TAX_REASONS = {
-    'AAM': _lt('AAM Alanyi adómentes'),
-    'TAM': _lt('TAM Tárgyi adómentes'),
-    'KBAET': _lt('KBAET EU-ba eladás - ÁFA tv.89.§'),
-    'KBAUK': _lt('KBAUK Új közlekedési eszköz EU-n belülre - ÁFA tv.89.§(2)'),
-    'EAM': _lt('EAM Termékexport 3.országba - ÁFA tv.98-109.§'),
-    'NAM': _lt('NAM egyéb export ügylet ÁFA tv 110-118.§'),
-    'ATK': _lt('ATK ÁFA tárgyán kívüli - ÁFA tv.2-3.§'),
-    'EUFAD37': _lt('EUFAD37 ÁFA tv. 37.§ (1) Fordított ÁFA másik EU-s országban'),
-    'EUFADE': _lt('EUFADE Fordított ÁFA másik EU-s országban nem ÁFA tv. 37.§ (1)'),
-    'EUE': _lt('EUE 2.EU-s országban teljesített eladás'),
-    'HO': _lt('HO Szolgáltatás 3.országba'),
+    'AAM': _lt('AAM Tax exempt'),
+    'TAM': _lt('TAM Exempt property'),
+    'KBAET': _lt('KBAET sale to EU - VAT tv.§ 89.'),
+    'KBAUK': _lt('KBAUK New means of transport within the EU - VAT tv.§ 89.§(2)'),
+    'EAM': _lt('EAM Product export to 3rd country - VAT tv.98-109.§'),
+    'NAM': _lt('NAM other export transaction VAT law § 110-118'),
+    'ATK': _lt('ATK Outside the scope of VAT - VAT tv.2-3.§'),
+    'EUFAD37': _lt('EUFAD37 § 37 (1) Reverse VAT in another EU country'),
+    'EUFADE': _lt('EUFADE Reverse charge of VAT in another EU country not VAT tv. § 37 (1)'),
+    'EUE': _lt('EUE Sales made in a 2nd EU country'),
+    'HO': _lt('HO Service to 3rd country'),
 }
 
 
