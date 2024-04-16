@@ -19,6 +19,7 @@ class L10nHuEdiTestInvoiceXml(L10nHuEdiTestCommon):
         with freeze_time('2024-02-01'):
             invoice = self.create_invoice_simple()
             invoice.action_post()
+            invoice._l10n_hu_edi_set_chain_index()
             invoice_xml = invoice._l10n_hu_edi_generate_xml()
 
             with tools.file_open('l10n_hu_edi/tests/invoice_xmls/invoice_simple.xml', 'rb') as expected_xml_file:
@@ -32,6 +33,7 @@ class L10nHuEdiTestInvoiceXml(L10nHuEdiTestCommon):
 
             credit_note = self.create_reversal(invoice)
             credit_note.action_post()
+            credit_note._l10n_hu_edi_set_chain_index()
             credit_note_xml = credit_note._l10n_hu_edi_generate_xml()
 
             with tools.file_open('l10n_hu_edi/tests/invoice_xmls/credit_note.xml', 'rb') as expected_xml_file:

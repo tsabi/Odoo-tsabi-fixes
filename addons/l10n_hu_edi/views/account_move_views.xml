@@ -44,7 +44,7 @@
                     <group>
                         <group>
                             <field name="l10n_hu_edi_state" readonly="1"/>
-                            <field name="l10n_hu_invoice_chain_index" readonly="state == 'draft'"/>
+                            <field name="l10n_hu_invoice_chain_index" readonly="1"/>
                         </group>
                         <group>
                             <field name="l10n_hu_edi_send_time" readonly="1"/>

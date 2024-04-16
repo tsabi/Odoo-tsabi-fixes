@@ -36,35 +36,39 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
         credit_note = self.create_reversal(invoice)
         with self.set_invoice_name(credit_note, 'RINV/2024/'):
             credit_note.action_post()
             send_and_print = self.create_send_and_print(credit_note, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': 1}])
 
             cancel_wizard = self.env['l10n_hu_edi.cancellation'].with_context({"default_invoice_id": credit_note.id}).create({
                 'code': 'ERRATIC_DATA',
                 'reason': 'Some reason...',
             })
             cancel_wizard.button_request_cancel()
-            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending'}])
+            self.assertRecordValues(credit_note, [{'l10n_hu_edi_state': 'cancel_pending', 'l10n_hu_invoice_chain_index': 1}])
 
     def test_send_advance_final_invoice(self):
+        # Skip if sale is not installed
+        if 'sale_line_ids' not in self.env['account.move.line']:
+            self.skipTest('Sale module not installed, skipping advance invoice tests.')
+
         advance_invoice, final_invoice = self.create_advance_invoice()
         with self.set_invoice_name(advance_invoice, 'INV/2024/'):
             advance_invoice.action_post()
             send_and_print = self.create_send_and_print(advance_invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(advance_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(advance_invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
         with self.set_invoice_name(final_invoice, 'INV/2024/'):
             final_invoice.action_post()
             send_and_print = self.create_send_and_print(final_invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(final_invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(final_invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
     def test_send_invoice_complex_huf(self):
         invoice = self.create_invoice_complex_huf()
@@ -72,7 +76,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
     def test_send_invoice_complex_eur(self):
         invoice = self.create_invoice_complex_eur()
@@ -80,7 +84,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             invoice.action_post()
             send_and_print = self.create_send_and_print(invoice, l10n_hu_edi_enable_nav_30=True)
             send_and_print.action_send_and_print()
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
     def test_timeout_recovery_fail(self):
         invoice = self.create_invoice_simple()
@@ -90,13 +94,13 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
         with self.patch_call_nav_endpoint('manageInvoice', make_request=False), contextlib.suppress(UserError):
             send_and_print.action_send_and_print()
 
-        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout', 'l10n_hu_invoice_chain_index': -1}])
 
         # Set the send time 7 minutes in the past so the timeout recovery mechanism triggers.
         invoice.l10n_hu_edi_send_time -= timedelta(minutes=7)
         with contextlib.suppress(UserError):
             invoice.l10n_hu_edi_button_update_status()
-        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'rejected'}])
+        self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'rejected', 'l10n_hu_invoice_chain_index': 0}])
 
     def test_timeout_recovery_success(self):
         invoice = self.create_invoice_simple()
@@ -106,13 +110,12 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
             with self.patch_call_nav_endpoint('manageInvoice'), contextlib.suppress(UserError):
                 send_and_print.action_send_and_print()
 
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout'}])
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'send_timeout', 'l10n_hu_invoice_chain_index': -1}])
 
             # Set the send time 7 minutes in the past so the timeout recovery mechanism triggers.
             invoice.l10n_hu_edi_send_time -= timedelta(minutes=7)
             invoice.l10n_hu_edi_button_update_status()
-            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed'}])
-
+            self.assertRecordValues(invoice, [{'l10n_hu_edi_state': 'confirmed', 'l10n_hu_invoice_chain_index': -1}])
 
     # === Helpers === #
 
@@ -137,6 +140,7 @@ class L10nHuEdiTestFlowsLive(L10nHuEdiTestCommon, TestAccountMoveSendCommon):
         :param make_request bool: If true, will still make the request before raising the timeout.
         """
         real_call_nav_endpoint = L10nHuEdiConnection._call_nav_endpoint
+
         def mock_call_nav_endpoint(self, mode, service, data, timeout=20):
             if service == endpoint:
                 if make_request:

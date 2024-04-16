@@ -85,7 +85,12 @@ class AccountMove(models.Model):
     )
     l10n_hu_invoice_chain_index = fields.Integer(
         string='Invoice Chain Index',
-        help='Index in the chain of modification invoices.',
+        help="""
+            Index in the chain of modification invoices:
+                -1 for a base invoice;
+                1, 2, 3, ... for modification invoices;
+                0 for rejected/cancelled invoices or if it has not yet been set.
+            """,
         copy=False,
     )
     l10n_hu_edi_attachment_filename = fields.Char(
@@ -152,14 +157,6 @@ class AccountMove(models.Model):
             }
 
         return super().button_request_cancel()
-
-    def _post(self, soft=True):
-        # EXTEND account
-        today = fields.Date.context_today(self)
-        to_post = self.filtered(lambda move: move.date <= today) if soft else self
-        for move in to_post.filtered(lambda m: m.country_code == 'HU' and m.is_sale_document()):
-            move._l10n_hu_edi_set_chain_index()
-        return super()._post(soft=soft)
 
     # === Actions === #
 
@@ -231,12 +228,12 @@ class AccountMove(models.Model):
         return base_invoices
 
     def _l10n_hu_get_chain_invoices(self):
-        """ Given base invoices, get all invoices in the chain that already have an index. """
+        """ Given base invoices, get all invoices in the chain. """
         chain_invoices = self
         next_invoices = self
         while (next_invoices := next_invoices.reversal_move_id | next_invoices.debit_note_ids):
             chain_invoices |= next_invoices
-        return chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index)
+        return chain_invoices
 
     def _l10n_hu_get_currency_rate(self):
         """ Get the invoice currency / HUF rate.
@@ -270,12 +267,13 @@ class AccountMove(models.Model):
             # Lock base invoice to prevent concurrent updates, ensuring sequence integrity.
             base_invoice._l10n_hu_edi_acquire_lock()
 
-            prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices()
-            if not self.l10n_hu_invoice_chain_index:
-                last_chain_invoice = prev_chain_invoices.sorted(lambda m: m.l10n_hu_invoice_chain_index)[-1]
-                self.l10n_hu_invoice_chain_index = last_chain_invoice.l10n_hu_invoice_chain_index + 1 or 1
-            else:
-                last_chain_invoice = prev_chain_invoices.filtered(lambda m: m.l10n_hu_invoice_chain_index == (self.l10n_hu_invoice_chain_index - 1 or -1))
+            chain_indexes_already_sent = base_invoice._l10n_hu_get_chain_invoices().filtered(
+                lambda m: m.l10n_hu_edi_state not in ['rejected', 'cancelled']
+            ).mapped('l10n_hu_invoice_chain_index')
+            for i in range(1, len(chain_indexes_already_sent) + 1):
+                if i not in chain_indexes_already_sent:
+                    self.l10n_hu_invoice_chain_index = i
+                    break
 
     def _l10n_hu_edi_acquire_lock(self):
         """ Acquire a write lock on the invoices in self. """
@@ -355,18 +353,14 @@ class AccountMove(models.Model):
                 'records': self.env['account.move'].union(*[
                     move._l10n_hu_get_chain_base()._l10n_hu_get_chain_invoices().filtered(
                         lambda m: (
-                            m.l10n_hu_invoice_chain_index < move.l10n_hu_invoice_chain_index
-                            and m.l10n_hu_edi_state not in ['confirmed', 'confirmed_warning']
+                            m.id < move.id
+                            and m.l10n_hu_edi_state in [False, 'rejected', 'cancelled']
+                            and m not in self
                         )
                     )
                     for move in self
                 ]),
-                'message': _('Please wait for all invoices in the chain to be confirmed before sending!'),
-                'action_text': _('View invoice(s)'),
-            },
-            'invoice_chain_index_not_set': {
-                'records': self.filtered(lambda m: not m.l10n_hu_invoice_chain_index),
-                'message': _('The invoice was created before Hungarian e-invoicing was installed, before sending please reset to draft and re-confirm.'),
+                'message': _('The following invoices appear to be earlier in the chain, but have not yet been sent. Please send them first.'),
                 'action_text': _('View invoice(s)'),
             },
             'invoice_line_not_one_vat_tax': {
@@ -416,6 +410,7 @@ class AccountMove(models.Model):
 
     def _l10n_hu_edi_upload(self, connection):
         """ Generate invoice XMLs and send to NAV. """
+        self = self.sorted(lambda m: m.id)
         for invoice in self:
             # If we come from the 'cancelled' state, this means the previous XML had been confirmed
             # before it was cancelled.
@@ -430,6 +425,10 @@ class AccountMove(models.Model):
                     'name': f'{invoice.name.replace("/", "_")}_cancelled_{invoice.l10n_hu_edi_transaction_code}.xml',
                 })
 
+            # Set chain index
+            invoice._l10n_hu_edi_set_chain_index()
+
+            # Generate XML
             invoice.l10n_hu_edi_attachment = base64.b64encode(invoice._l10n_hu_edi_generate_xml())
 
             # Set name & mimetype on newly-created attachment.
@@ -504,6 +503,7 @@ class AccountMove(models.Model):
             return self.write({
                 'l10n_hu_edi_state': 'rejected',
                 'l10n_hu_edi_transaction_code': False,
+                'l10n_hu_invoice_chain_index': 0,
                 'l10n_hu_edi_messages': {
                     'error_title': _('Invoice submission failed.'),
                     'errors': e.errors,
@@ -644,6 +644,7 @@ class AccountMove(models.Model):
                     to_cancel = self if self.reversed_entry_id or self.debit_origin_id else self._l10n_hu_get_chain_invoices().filtered(lambda m: m.l10n_hu_edi_state)
                     to_cancel.write({
                         'l10n_hu_edi_state': 'cancelled',
+                        'l10n_hu_invoice_chain_index': 0,
                         'l10n_hu_edi_messages': {
                             'error_title': _('The annulment request has been approved by the user on the OnlineSzámla portal.'),
                             'errors': get_errors_from_processing_result(processing_result),
@@ -664,6 +665,7 @@ class AccountMove(models.Model):
             if self.l10n_hu_edi_state in ['sent', 'send_timeout']:
                 self.write({
                     'l10n_hu_edi_state': 'rejected',
+                    'l10n_hu_invoice_chain_index': 0,
                     'l10n_hu_edi_messages': {
                         'error_title': _('The invoice was rejected by the NAV.'),
                         'errors': get_errors_from_processing_result(processing_result),
@@ -817,7 +819,7 @@ class AccountMove(models.Model):
         sign = 1.0 if self.is_inbound() else -1.0
 
         prev_chain_invoices = base_invoice._l10n_hu_get_chain_invoices().filtered(
-            lambda m: m.l10n_hu_invoice_chain_index < self.l10n_hu_invoice_chain_index
+            lambda m: m.l10n_hu_invoice_chain_index and m.l10n_hu_invoice_chain_index < self.l10n_hu_invoice_chain_index
         )
         first_line_number = sum(
             len(move.line_ids.filtered(lambda l: l.display_type in ['product', 'rounding']))

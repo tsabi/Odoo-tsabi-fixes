@@ -230,6 +230,7 @@ class ResCompany(models.Model):
             invoices_to_check.filtered(
                 lambda m: m.l10n_hu_edi_state == 'send_timeout' and m.l10n_hu_edi_send_time < recovery_close_time
             ).write({
+                'l10n_hu_invoice_chain_index': 0,
                 'l10n_hu_edi_state': 'rejected',
             })
 
