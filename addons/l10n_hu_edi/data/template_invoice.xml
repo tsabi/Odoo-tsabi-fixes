@@ -59,7 +59,7 @@
                             <customerBankAccountNumber t-out="customerBankAccountNumber"/>
                         </customerInfo>
                         <invoiceDetail>
-                            <invoiceCategory>NORMAL</invoiceCategory>
+                            <invoiceCategory t-translation="off">NORMAL</invoiceCategory>
                             <invoiceDeliveryDate t-out="invoice.delivery_date or invoice.invoice_date"/>
                             <smallBusinessIndicator t-out="format_bool(smallBusinessIndicator)"/>
                             <currencyCode t-out="invoice.currency_id.name"/>
@@ -67,7 +67,7 @@
                             <paymentMethod t-if="invoice.l10n_hu_payment_mode" t-out="invoice.l10n_hu_payment_mode"/>
                             <paymentDate t-if="invoice.invoice_date_due" t-out="invoice.invoice_date_due"/>
                             <cashAccountingIndicator t-out="format_bool(cashAccountingIndicator)"/>
-                            <invoiceAppearance>PAPER</invoiceAppearance>
+                            <invoiceAppearance t-translation="off">PAPER</invoiceAppearance>
                         </invoiceDetail>
                     </invoiceHead>
                     <invoiceLines>
@@ -142,14 +142,14 @@
             <case t-out="tax.l10n_hu_tax_type"/>
             <reason t-out="tax.l10n_hu_tax_reason"/>
         </vatOutOfScope>
-        <vatDomesticReverseCharge t-if="tax.l10n_hu_tax_type == 'DOMESTIC_REVERSE'">true</vatDomesticReverseCharge>
+        <vatDomesticReverseCharge t-if="tax.l10n_hu_tax_type == 'DOMESTIC_REVERSE'" t-translation="off">true</vatDomesticReverseCharge>
         <marginSchemeIndicator t-if="tax.l10n_hu_tax_type in ['TRAVEL_AGENCY', 'SECOND_HAND', 'ARTWORK', 'ANTIQUES']" t-out="tax.l10n_hu_tax_type"/>
         <vatAmountMismatch t-if="tax.l10n_hu_tax_type in ['REFUNDABLE_VAT', 'NONREFUNDABLE_VAT']">
             <vatRate>
                 <vatPercentage t-out="float_repr(vatPercentage, 4)"/>
             </vatRate>
         </vatAmountMismatch>
-        <noVatCharge t-if="tax.l10n_hu_tax_type == 'NO_VAT'">true</noVatCharge>
+        <noVatCharge t-if="tax.l10n_hu_tax_type == 'NO_VAT'" t-translation="off">true</noVatCharge>
     </template>
     
     <template id="nav_online_invoice_xml_3_0_line">
@@ -157,10 +157,10 @@
         <lineNumber t-out="line_values['lineNumber']"/>
         <lineModificationReference t-if="line_values['lineNumberReference']">
             <lineNumberReference t-out="line_values['lineNumberReference']"/>
-            <lineOperation>CREATE</lineOperation>
+            <lineOperation t-translation="off">CREATE</lineOperation>
         </lineModificationReference>
         <advanceData t-if="line_values.get('advanceIndicator')">
-            <advanceIndicator>true</advanceIndicator>
+            <advanceIndicator t-translation="off">true</advanceIndicator>
             <advancePaymentData t-if="line_values.get('advanceOriginalInvoice')">
                 <advanceOriginalInvoice t-out="line_values.get('advanceOriginalInvoice')"/>
                 <advancePaymentDate t-out="line_values.get('advancePaymentDate')"/>
@@ -173,7 +173,7 @@
                 <productCodeValue t-out="line.product_id.l10n_hu_product_code"/>
             </productCode>
             <productCode t-if="line.product_id.default_code">
-                <productCodeCategory>OWN</productCodeCategory>
+                <productCodeCategory t-translation="off">OWN</productCodeCategory>
                 <productCodeOwnValue t-out="line.product_id.default_code"/>
             </productCode>
         </productCodes>

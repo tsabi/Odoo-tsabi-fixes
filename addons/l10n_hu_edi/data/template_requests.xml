@@ -5,8 +5,8 @@
         <common:header>
             <common:requestId t-out="requestId"/>
             <common:timestamp t-out="timestamp"/>
-            <common:requestVersion>3.0</common:requestVersion>
-            <common:headerVersion>1.0</common:headerVersion>
+            <common:requestVersion t-translation="off">3.0</common:requestVersion>
+            <common:headerVersion t-translation="off">1.0</common:headerVersion>
         </common:header>
         <common:user>
             <common:login t-out="login"/>

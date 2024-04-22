@@ -15,7 +15,7 @@ class ProductTemplate(models.Model):
             ('KT', 'KT - Environmental Product Code'),
             ('CSK', 'CSK - Packaging Catalogue Code'),
             ('EJ', 'EJ - Building Registry Number'),
-            ('OTHER', 'OTHER'),
+            ('OTHER', 'Other'),
         ],
         string='(HU) Product Code Type',
         help='If your product has a code in a standard nomenclature, you can indicate which nomenclature here.',

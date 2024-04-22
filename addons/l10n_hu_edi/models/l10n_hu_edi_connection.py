@@ -351,6 +351,9 @@ class L10nHuEdiConnection:
 
     # === Helpers: HTTP Post === #
 
+    def _get_list_of_nav_services(self):
+        return ['tokenExchange', 'queryTaxpayer', 'manageInvoice', 'queryTransactionStatus', 'queryTransactionList', 'manageAnnulment']
+
     def _call_nav_endpoint(self, mode, service, data, timeout=20):
         if mode == 'production':
             url = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v3/'
@@ -359,7 +362,7 @@ class L10nHuEdiConnection:
         else:
             raise L10nHuEdiConnectionError(_('Mode should be Production or Test!'))
 
-        services = ['tokenExchange', 'queryTaxpayer', 'manageInvoice', 'queryTransactionStatus', 'queryTransactionList', 'manageAnnulment']
+        services = self._get_list_of_nav_services()
         if service in services:
             url += service
         else:

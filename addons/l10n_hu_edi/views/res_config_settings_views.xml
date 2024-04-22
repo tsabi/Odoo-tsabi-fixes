@@ -8,8 +8,11 @@
             <xpath expr="//block[@id='invoicing_settings']" position="after">
                 <block title="Hungarian Electronic Invoicing"
                        invisible="country_code != 'HU'"
-                       groups="account.group_account_manager">
-                    <setting company_dependent="1" string="NAV Credentials" help="Enter your e-invoicing credentials given by the Hungarian Authority.">
+                       groups="account.group_account_manager"
+                       name="l10n_hu_edi_settings">
+                    <setting company_dependent="1" string="NAV Credentials"
+                             help="Enter your e-invoicing credentials given by the Hungarian Authority."
+                             name="l10n_hu_edi_nav_credentials">
                         <div class="row">
                             <label string="Mode" for="l10n_hu_edi_server_mode" class="col-lg-3 o_light_label"/>
                             <field name="l10n_hu_edi_server_mode"/>
@@ -31,7 +34,9 @@
                             <field name="l10n_hu_edi_replacement_key"/>
                         </div>
                     </setting>
-                    <setting company_dependent="1" help="Your company's specific tax arrangements, if any of these apply to your company.">
+                    <setting company_dependent="1"
+                             help="Your company's specific tax arrangements, if any of these apply to your company."
+                             name="l10n_hu_edi_specials">
                         <field name="l10n_hu_tax_regime"/>
                     </setting>
                 </block>
