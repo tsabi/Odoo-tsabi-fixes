@@ -17,6 +17,10 @@
                         <field name="name_to" invisible="selection_mode != 'name'"/>
                     </group>
                 </group>
+                <group>
+                    <field name="export_format" widget="radio"/>
+                    <field name="use_cdata" invisible="export_format!='aee'"/>
+                </group>
                 <div invisible="not export_file">
                     <field name="export_file" widget="binary" filename="filename" readonly="1"/>
                     <field name="filename" invisible="1"/>

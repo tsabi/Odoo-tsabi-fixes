@@ -2,7 +2,7 @@
 
 {
     'name': 'Hungary - E-invoicing',
-    'version': '1.0.0',
+    'version': '1.0.1',
     'category': 'Accounting/Localizations/EDI',
     'author': 'DO Tech (OdooTech Zrt.), BDSC Business Consulting Kft. & Odoo S.A.',
     'description': """
@@ -17,6 +17,7 @@
         'data/account_cash_rounding.xml',
         'data/template_requests.xml',
         'data/template_invoice.xml',
+        'data/template_tax_audit_export.xml',
         'data/ir_cron.xml',
         'views/report_templates.xml',
         'views/report_invoice.xml',
